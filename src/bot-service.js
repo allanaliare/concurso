@@ -8,7 +8,7 @@ export function text(value,max=500,required=true) {
   if(typeof value!=='string' || value.length>max || (required&&!value.trim()))fail('Texto ausente ou acima do limite.');
   return value.trim();
 }
-export function id(value) { const n=Number(value);if(!Number.isSafeInteger(n)||n<1)fail('Identificador inválido.');return n; }
+export function id(value) { if(typeof value!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value))fail('UUID inválido.');return value.toLowerCase(); }
 const flag = v => v===true||v===1||v==='1'||v==='on'?1:0;
 export const normalize = value => String(value).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/!(duvida|concurso)\b/g,'').replace(/[^a-z0-9\s]/g,' ').trim();
 const stop=new Set(['a','o','as','os','de','da','do','das','dos','e','em','para','por','que','qual','como','um','uma','ser','vai','posso']);
@@ -34,7 +34,7 @@ export function botService(db,config) {
     if(!/^[\w-]+@g\.us$/.test(data.remote_jid)||!/^\d+@s\.whatsapp\.net$/.test(data.bot_jid))fail('Informe o JID do grupo e o número do bot com DDI.');
     const existing=groupId?getGroup(groupId):null;
     if(existing&&(existing.contest_id!==c.id||existing.instance!==data.instance||existing.remote_jid!==data.remote_jid)&&db.prepare("SELECT id FROM reminders WHERE group_id=? AND status='PROCESSANDO' LIMIT 1").get(existing.id))fail('Aguarde os envios em processamento antes de alterar o destino do grupo.',409);
-    if(db.prepare('SELECT id FROM groups WHERE instance=? AND remote_jid=? AND id<>?').get(data.instance,data.remote_jid,existing?.id||0))fail('Este grupo já está cadastrado nesta instância.',409);
+    if(db.prepare('SELECT id FROM groups WHERE instance=? AND remote_jid=? AND id<>?').get(data.instance,data.remote_jid,existing?.id||''))fail('Este grupo já está cadastrado nesta instância.',409);
     db.exec('BEGIN IMMEDIATE');
     try {
       let code=existing?.code;
@@ -45,7 +45,7 @@ export function botService(db,config) {
         db.prepare('UPDATE groups SET name=?,instance=?,remote_jid=?,bot_jid=?,contest_id=?,active=?,respond_mention=?,respond_command=?,code=? WHERE id=?').run(...Object.values(data),code,existing.id);
         if(existing.contest_id!==c.id)db.prepare("UPDATE reminders SET status='CANCELADO',error='Concurso do grupo alterado' WHERE group_id=? AND status IN ('PENDENTE','ERRO')").run(existing.id);
         resultId=existing.id;
-      } else resultId=Number(db.prepare('INSERT INTO groups(name,instance,remote_jid,bot_jid,contest_id,active,respond_mention,respond_command,code) VALUES(?,?,?,?,?,?,?,?,?)').run(...Object.values(data),code).lastInsertRowid);
+      } else resultId=db.prepare('INSERT INTO groups(name,instance,remote_jid,bot_jid,contest_id,active,respond_mention,respond_command,code) VALUES(?,?,?,?,?,?,?,?,?) RETURNING id').get(...Object.values(data),code).id;
       audit(existing?'grupo.atualizado':'grupo.criado',resultId);db.exec('COMMIT');return getGroup(resultId);
     } catch(e){db.exec('ROLLBACK');throw e;}
   }
@@ -56,7 +56,7 @@ export function botService(db,config) {
     if(faqId) {
       if(!db.prepare('SELECT id FROM faqs WHERE id=? AND contest_id=?').get(id(faqId),id(contestId)))fail('FAQ não encontrada.',404);
       db.prepare('UPDATE faqs SET question=?,answer=?,keywords=?,sort_order=?,active=? WHERE id=?').run(...values,id(faqId));
-    } else faqId=Number(db.prepare('INSERT INTO faqs(question,answer,keywords,sort_order,active,contest_id) VALUES(?,?,?,?,?,?)').run(...values,id(contestId)).lastInsertRowid);
+    } else faqId=db.prepare('INSERT INTO faqs(question,answer,keywords,sort_order,active,contest_id) VALUES(?,?,?,?,?,?) RETURNING id').get(...values,id(contestId)).id;
     audit('faq.salva',faqId);return db.prepare('SELECT * FROM faqs WHERE id=?').get(id(faqId));
   }
   function reminder(body,reminderId) {
@@ -67,13 +67,13 @@ export function botService(db,config) {
     if(!Number.isSafeInteger(hours)||hours<0||hours>8760||(hours>0&&(!until||until<=execute)))fail('Repetição precisa de intervalo entre 1 e 8760 horas e data final posterior.');
     const values=[g.id,c.id,type,message,execute,body.execute_local,hours,until];
     if(reminderId){const r=getReminder(reminderId);if(r.status!=='PENDENTE'||r.attempts>0)fail('Somente lembretes pendentes sem tentativas podem ser editados.',409);db.prepare('UPDATE reminders SET group_id=?,contest_id=?,type=?,message=?,execute_at=?,original_local=?,repeat_hours=?,repeat_until=? WHERE id=?').run(...values,r.id);}
-    else reminderId=Number(db.prepare('INSERT INTO reminders(group_id,contest_id,type,message,execute_at,original_local,repeat_hours,repeat_until) VALUES(?,?,?,?,?,?,?,?)').run(...values).lastInsertRowid);
+    else reminderId=db.prepare('INSERT INTO reminders(group_id,contest_id,type,message,execute_at,original_local,repeat_hours,repeat_until) VALUES(?,?,?,?,?,?,?,?) RETURNING id').get(...values).id;
     audit('lembrete.salvo',reminderId);return getReminder(reminderId);
   }
   const getReminder=value=>db.prepare('SELECT * FROM reminders WHERE id=?').get(id(value))||fail('Lembrete não encontrado.',404);
   const confirmation=g=>`${config.baseUrl}/l/${g.code}`;
   function renderReminder(r,g,c) {
-    return redact(r.message.replace(/\{\{(nome_concurso|link_confirmacao|link_inscricao|data_fim|data_prova)\}\}/g,(_,key)=>({nome_concurso:c.title,link_confirmacao:confirmation(g),link_inscricao:c.official_url,data_fim:c.deadline.replace('T',' '),data_prova:c.starts.replace('T',' ')}[key])));
+    return redact(r.message.replace(/\{\{(nome_concurso|link_confirmacao|link_inscricao|data_fim|data_prova)\}\}/g,(_,key)=>({nome_concurso:c.title,link_confirmacao:confirmation(g),link_inscricao:confirmation(g),data_fim:c.deadline.replace('T',' '),data_prova:c.starts.replace('T',' ')}[key])));
   }
   function recover() {
     // Never requeue ambiguous sends automatically: delivery may already have happened.
@@ -139,20 +139,20 @@ export function botService(db,config) {
         const faqs=db.prepare('SELECT question,answer,keywords FROM faqs WHERE contest_id=? AND active=1 ORDER BY sort_order,id LIMIT 50').all(c.id),found=matchFaq(question,faqs);
         const q=normalize(question);
         let answer;
-        if(/\b(cadastrei|confirmar|confirmacao|cpf)\b/.test(q))answer=`Confirme sua inscrição pelo formulário privado: ${confirmation(g)}\nNão envie CPF no grupo.`;
+        if(/\b(cadastrei|confirmar|confirmacao|cpf)\b/.test(q))answer=`Cadastre-se para trabalhar pelo formulário privado: ${confirmation(g)}\nNão envie CPF no grupo.`;
         else if(found)answer=found.answer;
         else if(/\b(data|dia|horario|hora|quando)\b/.test(q)&&/\bprova\b/.test(q))answer=`Prova: ${c.starts.replace('T',' às ')}. Chegada: ${c.arrival.replace('T',' às ')}. Término: ${c.ends.replace('T',' às ')}. Horário de Brasília.`;
         else if(/\b(local|onde|endereco)\b/.test(q))answer=`Local da prova: ${c.location}.`;
-        else if(/\b(taxa|valor|custo)\b/.test(q))answer=`Taxa de inscrição: R$ ${Number(c.fee).toFixed(2).replace('.',',')}.`;
+        else if(/\b(taxa|valor|custo)\b/.test(q))answer='O cadastro para trabalhar no concurso é gratuito.';
         else if(/\bvagas\b/.test(q))answer=`Vagas: ${c.vacancies}. Cargos: ${c.role}.`;
-        else if(/\b(inscricao|inscrever|inscricoes)\b/.test(q))answer=`Inscrições até ${c.deadline.replace('T',' às ')} (Brasília). ${c.official_url}`;
+        else if(/\b(inscricao|inscrever|inscricoes)\b/.test(q))answer=`Cadastros para trabalhar até ${c.deadline.replace('T',' às ')} (Brasília). ${confirmation(g)}`;
         else if(/\bedital\b/.test(q))answer=c.edital_url?`Edital: ${c.edital_url}`:c.fallback;
-        result=answer?{action:'SEND_GROUP_MESSAGE',instance,target:remote,text:redact(answer).slice(0,500)}:{action:'ASK_AI',instance,target:remote,question,context:{concurso:c.title,cargo:c.role,vagas:c.vacancies,taxa:c.fee,local:c.location,inicio:c.starts,chegada:c.arrival,termino:c.ends,inscricoesAte:c.deadline,fuso:'America/Sao_Paulo',linkEdital:c.edital_url,informacoes:redact(c.ai_context+'\n'+c.notes).slice(0,12000),faqs:faqs.map(f=>({pergunta:redact(f.question),resposta:redact(f.answer)}))},fallback:c.fallback,maxCharacters:500};
+        result=answer?{action:'SEND_GROUP_MESSAGE',instance,target:remote,text:redact(answer).slice(0,500)}:{action:'ASK_AI',instance,target:remote,question,context:{finalidade:'Cadastro gratuito de trabalhadores para o concurso',concurso:c.title,cargo:c.role,vagas:c.vacancies,local:c.location,inicio:c.starts,chegada:c.arrival,termino:c.ends,inscricoesAte:c.deadline,fuso:'America/Sao_Paulo',linkEdital:c.edital_url,informacoes:redact(c.ai_context+'\n'+c.notes).slice(0,12000),faqs:faqs.map(f=>({pergunta:redact(f.question),resposta:redact(f.answer)}))},fallback:c.fallback,maxCharacters:500};
         if(result.text&&db.prepare("SELECT id FROM bot_messages WHERE group_id=? AND response=? AND action<>'IGNORE' AND created_at>? LIMIT 1").get(g.id,result.text,new Date(Date.now()-60000).toISOString()))result=ignore('GROUP_REPEAT_LIMIT');
       }
-      const r=db.prepare('INSERT INTO bot_messages(instance,message_id,group_id,sender_hash,question,response,action,status,created_at,contest_id) VALUES(?,?,?,?,?,?,?,?,?,?)').run(instance,messageId,g.id,sender,question,result.text||'',result.action,result.action==='IGNORE'?'IGNORADO':result.action==='ASK_AI'?'AGUARDANDO_IA':'PREPARADO',now(),c.id);
+      const r=db.prepare('INSERT INTO bot_messages(instance,message_id,group_id,sender_hash,question,response,action,status,created_at,contest_id) VALUES(?,?,?,?,?,?,?,?,?,?) RETURNING id').get(instance,messageId,g.id,sender,question,result.text||'',result.action,result.action==='IGNORE'?'IGNORADO':result.action==='ASK_AI'?'AGUARDANDO_IA':'PREPARADO',now(),c.id);
       db.prepare('UPDATE groups SET last_message_at=? WHERE id=?').run(now(),g.id);
-      if(result.action!=='IGNORE')result.processing_id=Number(r.lastInsertRowid);
+      if(result.action!=='IGNORE')result.processing_id=r.id;
       db.exec('COMMIT');return result;
     }catch(e){db.exec('ROLLBACK');throw e;}
   }

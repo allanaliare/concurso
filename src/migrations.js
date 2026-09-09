@@ -43,4 +43,8 @@ export function migrate(db) {
       starts_utc=strftime('%Y-%m-%dT%H:%M:%fZ',starts,'+3 hours'),ends_utc=strftime('%Y-%m-%dT%H:%M:%fZ',ends,'+3 hours'),
       deadline_utc=strftime('%Y-%m-%dT%H:%M:%fZ',deadline,'+3 hours'),registration_opens_utc=strftime('%Y-%m-%dT%H:%M:%fZ',registration_opens,'+3 hours');
     INSERT INTO schema_migrations(version) VALUES(3);COMMIT;`);
+  if(!db.prepare('SELECT 1 FROM schema_migrations WHERE version=5').get())db.exec(`BEGIN IMMEDIATE;
+    ALTER TABLE registrations ADD COLUMN pix_type TEXT CHECK(pix_type IN ('cpf','celular','email','aleatoria'));
+    ALTER TABLE registrations ADD COLUMN pix_key TEXT;
+    INSERT INTO schema_migrations(version) VALUES(5); COMMIT;`);
 }

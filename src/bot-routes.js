@@ -25,7 +25,7 @@ export function botRouter(service,config) {
     if(!g.active||!c.active)fail('Grupo ou concurso pausado.',409);
     const target=text(req.body.participantJid,150);
     if(!/^\d+@(s\.whatsapp\.net|lid)$/.test(target))fail('Informe um destinatário privado válido.');
-    res.json({action:'SEND_PRIVATE_MESSAGE',instance:g.instance,target,text:`Confirme sua inscrição pelo formulário: ${config.baseUrl}/l/${g.code}. Não envie CPF pelo WhatsApp.`});
+    res.json({action:'SEND_PRIVATE_MESSAGE',instance:g.instance,target,text:`Cadastre-se para trabalhar pelo formulário: ${config.baseUrl}/l/${g.code}. Não envie CPF pelo WhatsApp.`});
   });
   router.post('/informar-cpf',(req,res)=>res.status(422).json({error:'CPF deve ser informado exclusivamente no formulário de confirmação. Use /confirmar-cadastro para obter o link.'}));
   router.use((error,req,res,next)=>res.status(error.status||400).json({error:error.code?'Não foi possível processar a solicitação.':error.message}));

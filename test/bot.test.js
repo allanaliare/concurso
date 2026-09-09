@@ -9,14 +9,15 @@ import { purgeExpired } from '../src/maintenance.js';
 const config={adminPassword:'password-for-tests',sessionSecret:'s'.repeat(40),cpfSecret:'h'.repeat(40),internalToken:'internal-test',baseUrl:'https://example.com'};
 function fixture() {
   const db=database(':memory:');privacy(db,config.cpfSecret);
-  db.prepare(`INSERT INTO contests(title,organizer,role,fee,vacancies,salary,location,arrival,starts,ends,deadline,official_url,notes) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`).run('Concurso Teste','Banca','Analista',80,12,'5000','São Paulo','2026-12-01T12:00','2026-12-01T13:00','2026-12-01T17:00','2026-11-01T18:00','https://example.com','Documento com foto');
+  db.prepare(`INSERT INTO contests(title,organizer,role,vacancies,salary,location,arrival,starts,ends,deadline,official_url,notes) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run('Concurso Teste','Banca','Analista',12,'5000','São Paulo','2026-12-01T12:00','2026-12-01T13:00','2026-12-01T17:00','2026-11-01T18:00','https://example.com','Documento com foto');
+  const contestId=db.prepare('SELECT id FROM contests').get().id;
   const s=botService(db,config);
-  const group=s.group({name:'Grupo A',instance:'test',remote_jid:'123@g.us',bot_jid:'5511999999999@s.whatsapp.net',contest_id:1,active:true,respond_command:true,respond_mention:true});
+  const group=s.group({name:'Grupo A',instance:'test',remote_jid:'123@g.us',bot_jid:'5511999999999@s.whatsapp.net',contest_id:contestId,active:true,respond_command:true,respond_mention:true});
   const event={instance:'test',messageId:'m1',remoteJid:'123@g.us',participantJid:'5511888888888@s.whatsapp.net',fromMe:false,isGroup:true,messageType:'conversation',text:'!duvida qual a data da prova?',mentionedJids:[],quotedMessageFromBot:false};
-  return {db,s,group,event};
+  return {db,s,group,event,contestId};
 }
 test('acionamento, grupos e isolamento de instâncias',()=>{
-  const {db,s,event,group}=fixture();
+  const {db,s,event,group,contestId}=fixture();
   try {
     assert.equal(s.processMessage({...event,text:'Bom dia'}).reason,'BOT_NOT_TRIGGERED');
     assert.equal(s.processMessage({...event,messageId:'m2',fromMe:true}).reason,'FROM_ME_OR_INVALID');
@@ -32,9 +33,9 @@ test('acionamento, grupos e isolamento de instâncias',()=>{
   } finally{db.close();}
 });
 test('FAQ, menção e resposta ao bot; IA não recebe CPF',()=>{
-  const {db,s,event,group}=fixture();
+  const {db,s,event,group,contestId}=fixture();
   try {
-    s.faq({question:'Pode levar caneta azul?',answer:'Use caneta azul transparente.',keywords:'caneta azul preta',active:true},1);
+    s.faq({question:'Pode levar caneta azul?',answer:'Use caneta azul transparente.',keywords:'caneta azul preta',active:true},contestId);
     assert.equal(s.processMessage({...event,text:'!duvida pode levar caneta azul?'}).text,'Use caneta azul transparente.');
     let r=s.processMessage({...event,messageId:'m2',participantJid:'5511777777777@s.whatsapp.net',text:'Qual documento devo levar?',mentionedJids:[group.bot_jid]});
     assert.equal(r.action,'ASK_AI');
@@ -84,9 +85,9 @@ test('conversão de Brasília independe do fuso do processo, inclusive meia-noit
   assert.throws(()=>localToUtc('2026-02-31T08:00'),/inválida/);
 });
 test('migração de CPF legado, detecção de chave trocada e retenção',()=>{
-  const {db}=fixture();
+  const {db,contestId}=fixture();
   try {
-    db.prepare("INSERT INTO registrations(contest_id,name,cpf,phone,source,created_at) VALUES(1,'Pessoa','52998224725','11999999999','formulario','2020-01-01')").run();
+    db.prepare("INSERT INTO registrations(contest_id,name,cpf,phone,source,created_at) VALUES(?,'Pessoa','52998224725','11999999999','formulario','2020-01-01')").run(contestId);
     privacy(db,config.cpfSecret);
     const r=db.prepare('SELECT * FROM registrations').get();assert.equal(r.cpf.length,64);assert.equal(r.cpf_final,'4725');
     assert.throws(()=>privacy(db,'z'.repeat(40)),/não corresponde/);

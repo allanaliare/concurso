@@ -1,10 +1,13 @@
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { migrate } from './migrations.js';
+import { randomUUID } from 'node:crypto';
+import { migrateUuids } from './uuid-migration.js';
 
 export function database(path = 'data/concurso.sqlite') {
   if (path !== ':memory:') mkdirSync('data', { recursive: true });
   const db = new DatabaseSync(path);
+  db.function('uuid', () => randomUUID());
   db.exec(`PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;
     CREATE TABLE IF NOT EXISTS contests (
       id INTEGER PRIMARY KEY, title TEXT NOT NULL, organizer TEXT NOT NULL, role TEXT NOT NULL,
@@ -30,5 +33,6 @@ export function database(path = 'data/concurso.sqlite') {
       status TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
     PRAGMA optimize;`);
   migrate(db);
+  migrateUuids(db);
   return db;
 }

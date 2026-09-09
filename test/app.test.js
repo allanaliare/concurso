@@ -34,9 +34,9 @@ test('envio ao n8n registra aceite e falha HTTP',async()=>{
     await request('/login');await request('/login',{password:'test-password'});await request('/admin/messages');
     await request('/admin/messages',{phone:'5511999999999',body:'Mensagem de teste'});
     assert.equal(received.auth,'Bearer out-secret');assert.equal(received.body.type,'whatsapp.send');
-    assert.equal(db.prepare('SELECT status FROM messages WHERE id=1').get().status,'aceito pelo n8n');
+    assert.equal(db.prepare('SELECT status FROM messages ORDER BY rowid ASC LIMIT 1').get().status,'aceito pelo n8n');
     fail=true;await request('/admin/messages',{phone:'5511999999999',body:'Outra mensagem'});
-    assert.equal(db.prepare('SELECT status FROM messages WHERE id=2').get().status,'falha HTTP 500');
+    assert.equal(db.prepare('SELECT status FROM messages ORDER BY rowid DESC LIMIT 1').get().status,'falha HTTP 500');
   } finally {await Promise.all([new Promise(r=>server.close(r)),new Promise(r=>mock.close(r))]);db.close();}
 });
 test('fluxo completo, autenticação, atribuição e idempotência',async()=>{
@@ -58,20 +58,52 @@ test('fluxo completo, autenticação, atribuição e idempotência',async()=>{
     assert.equal((await request('/login',{password:'wrong'})).response.status,401);
     assert.equal((await request('/login',{password:'senha-de-teste-123'})).response.status,302);
     await request('/admin');
-    const c={title:'Concurso Teste',organizer:'Banca',role:'Analista',fee:'80',vacancies:'12',salary:'R$ 5.000',location:'São Paulo',arrival:'2026-12-01T12:00',starts:'2026-12-01T13:00',ends:'2026-12-01T17:00',deadline:'2026-11-01T18:00',official_url:'https://example.com',notes:'Documento com foto'};
-    assert.equal((await request('/admin/contests/new',c)).response.status,302);
-    assert.equal((await request('/admin/contests/1/links',{group_name:'Grupo A'})).response.status,302);
+    assert.doesNotMatch((await request('/admin/contests/new')).text,/name="fee"/);
+    const c={title:'Concurso Teste',organizer:'Banca',role:'Analista',vacancies:'12',salary:'R$ 5.000',location:'São Paulo',arrival:'2026-12-01T12:00',starts:'2026-12-01T13:00',ends:'2026-12-01T17:00',deadline:'2026-11-01T18:00',official_url:'https://example.com',notes:'Documento com foto'};
+    for (const [changes,message] of [
+      [{deadline:'2026-12-02T18:00'},/O fim das inscrições/],
+      [{arrival:'2026-12-01T14:00'},/O horário de chegada/],
+      [{ends:c.starts},/O término da prova/]
+    ]) {
+      const invalid=await request('/admin/contests/new',{...c,...changes});
+      assert.equal(invalid.response.status,400);
+      assert.match(invalid.text,message);
+      assert.match(invalid.text,/value="Concurso Teste"/);
+      assert.equal(db.prepare('SELECT COUNT(*) n FROM contests').get().n,0);
+    }
+    const created=await request('/admin/contests/new',c);
+    assert.equal(created.response.status,302);
+    const contestId=db.prepare('SELECT id FROM contests').get().id;
+    assert.match(contestId,/^[0-9a-f-]{36}$/);
+    assert.equal(created.response.headers.get('location'),`/admin/contests/${contestId}`);
+    const invalidEdit=await request(`/admin/contests/${contestId}/edit`,{...c,title:'Título revisado',ends:c.starts});
+    assert.equal(invalidEdit.response.status,400);
+    assert.match(invalidEdit.text,/value="Título revisado"/);
+    assert.match(invalidEdit.text,/Editar concurso/);
+    assert.equal(db.prepare('SELECT title FROM contests WHERE id=?').get(contestId).title,c.title);
+    assert.equal((await request(`/admin/contests/${contestId}/edit`,c)).response.status,302);
+    assert.equal((await request(`/admin/contests/${contestId}/links`,{group_name:'Grupo A'})).response.status,302);
     const code=db.prepare('SELECT code FROM links').get().code;
     await request(`/l/${code}`);await request(`/l/${code}`);
     assert.equal(db.prepare('SELECT COUNT(*) n FROM clicks').get().n,2);
     assert.equal(db.prepare('SELECT COUNT(DISTINCT visitor) n FROM clicks').get().n,1);
-    await request(`/concursos/1?grupo=${code}`);
-    const person={name:'Pessoa Teste',cpf:'529.982.247-25',phone:'11999999999',consent:'yes',code};
-    assert.equal((await request('/concursos/1/confirmar',person)).response.status,200);
-    await request('/concursos/1/confirmar',person);
+    const publicPage=await request(`/concursos/${contestId}?grupo=${code}`);
+    assert.match(publicPage.text,/Cadastre-se para trabalhar/);
+    assert.doesNotMatch(publicPage.text,/Taxa de inscrição|pagamento à banca/);
+    const person={name:'Pessoa Teste',cpf:'529.982.247-25',phone:'11999999999',consent:'yes',code,pix_type:'email',pix_key:'colaborador@example.com'};
+    assert.match(publicPage.text,/name="pix_type"/);
+    assert.match(publicPage.text,/name="pix_key"/);
+    assert.equal((await request(`/concursos/${contestId}/confirmar`,{...person,pix_key:''})).response.status,400);
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM registrations').get().n,0);
+    assert.equal((await request(`/concursos/${contestId}/confirmar`,person)).response.status,200);
+    assert.equal(db.prepare('SELECT pix_key FROM registrations').get().pix_key,person.pix_key);
+    assert.match((await request('/admin/registrations')).text,/colaborador@example.com/);
+    assert.doesNotMatch((await request(`/concursos/${contestId}`)).text,/colaborador@example.com/);
+    await request(`/concursos/${contestId}/confirmar`,{...person,pix_key:'outra@example.com'});
+    assert.equal(db.prepare('SELECT pix_key FROM registrations').get().pix_key,person.pix_key);
     assert.equal(db.prepare('SELECT COUNT(*) n FROM registrations').get().n,1);
     assert.equal(db.prepare('SELECT code FROM registrations').get().code,code);
-    assert.equal((await request('/concursos/1/confirmar',{...person,_csrf:'invalid'})).response.status,403);
+    assert.equal((await request(`/concursos/${contestId}/confirmar`,{...person,_csrf:'invalid'})).response.status,403);
     assert.doesNotMatch((await request('/admin/registrations')).text,/529\.982\.247-25/);
     assert.equal(db.prepare('SELECT length(cpf) n FROM registrations').get().n,64);
     const hook=async(data,auth='Bearer test-token')=>fetch(base+'/api/webhooks/n8n',{method:'POST',headers:{'Content-Type':'application/json',Authorization:auth},body:JSON.stringify(data)});
@@ -82,11 +114,21 @@ test('fluxo completo, autenticação, atribuição e idempotência',async()=>{
     assert.equal(db.prepare('SELECT COUNT(*) n FROM messages').get().n,1);
     assert.equal((await hook({event_id:'bad',type:'invalid'})).status,400);
     assert.equal(db.prepare("SELECT COUNT(*) n FROM events WHERE event_id='bad'").get().n,0);
-    assert.equal((await hook({...person,cpf:'52998224725',event_id:'reg-1',type:'registration.completed',contest_id:1,consent:true})).status,200);
+    assert.equal((await hook({...person,cpf:'52998224725',event_id:'reg-1',type:'registration.completed',contest_id:contestId,consent:true})).status,200);
     assert.equal(db.prepare('SELECT COUNT(*) n FROM registrations').get().n,1);
-    await request('/admin/contests/1/toggle',{});
+    await request(`/admin/contests/${contestId}/close`,{});
     assert.equal((await request(`/l/${code}`)).response.status,404);
-    assert.equal((await request('/concursos/1')).response.status,404);
+    assert.equal((await request(`/concursos/${contestId}`)).response.status,404);
+    assert.doesNotMatch((await request('/')).text,/Concurso Teste/);
+    assert.equal((await request(`/concursos/${contestId}/confirmar`,person)).response.status,400);
+    assert.equal((await hook({...person,event_id:'closed',type:'registration.completed',contest_id:contestId,consent:true})).status,400);
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM registrations').get().n,1);
+    assert.match((await request('/admin')).text,/Concurso Teste/);
+    await request(`/admin/contests/${contestId}/close`,{});
+    assert.doesNotMatch((await request('/')).text,/Concurso Teste/);
+    await request(`/admin/contests/${contestId}/reopen`,{});
+    assert.match((await request('/')).text,/Concurso Teste/);
+    assert.equal((await request(`/concursos/${contestId}`)).response.status,200);
     await request('/logout',{});
     assert.equal((await request('/admin/registrations')).response.status,302);
   } finally {await new Promise(resolve=>server.close(resolve));db.close();}

@@ -1,6 +1,6 @@
 # Ponto de Prova
 
-Orquestrador de concursos em português, com front e back no mesmo projeto: Express 5, páginas HTML renderizadas no servidor e SQLite em `data/concurso.sqlite`. Requer Node.js 22.13 ou superior. Sem serviço externo de banco.
+Sistema de cadastro gratuito de pessoas interessadas em trabalhar em concursos, em português, com front e back no mesmo projeto: Express 5, páginas HTML renderizadas no servidor e SQLite em `data/concurso.sqlite`. Requer Node.js 22.13 ou superior. Sem serviço externo de banco.
 
 ## Executar localmente
 
@@ -19,13 +19,13 @@ Abra http://localhost:3000 e acesse **Área do organizador** com sua senha. Não
 
 ## Funcionalidades
 
-- Cadastro, edição, arquivamento e republicação de concursos, com banca, cargos, remuneração, taxa, vagas, local, datas, chegada, início, término, link oficial e orientações.
-- Página pública com informações e confirmação de inscrição com nome, CPF válido, telefone e autorização de uso dos dados.
+- Cadastro, edição, finalização e reabertura de cadastros para trabalhar em concursos, com organizadora, funções, remuneração e vagas, local, datas, chegada, início, término, link oficial e orientações.
+- Página pública com informações e cadastro para trabalhar com nome, CPF válido, telefone e autorização de uso dos dados.
 - Um link curto `/l/:codigo` por grupo. Contagem de cliques, visitantes estimados por sessão, confirmações por origem e últimos 50 acessos.
 - Painel protegido com lista de confirmações (nome, CPF, telefone, concurso, grupo e origem), filtrável por concurso, limitada aos 500 registros recentes.
 - Entrada de mensagens e confirmações pelo n8n, saída manual de mensagens e histórico dos últimos 100 envios/recebimentos.
 
-Cliques são anônimos: não é possível descobrir nome ou CPF de alguém apenas por acessar um link. O grupo é atribuído pelo link do formulário enviado; links encaminhados continuam atribuídos ao grupo original. Contagens incluem repetições, robôs e prévias; visitantes são uma estimativa por sessão, não pessoas únicas. A confirmação é autodeclarada e não comprova pagamento ou inscrição junto à banca. A unicidade é por concurso + CPF; reenvios não sobrescrevem dados pessoais existentes.
+Cliques são anônimos: não é possível descobrir nome ou CPF de alguém apenas por acessar um link. O grupo é atribuído pelo link do formulário enviado; links encaminhados continuam atribuídos ao grupo original. Contagens incluem repetições, robôs e prévias; visitantes são uma estimativa por sessão, não pessoas únicas. O cadastro é gratuito, destinado à equipe de trabalho e não garante contratação. A unicidade é por concurso + CPF; reenvios não sobrescrevem dados pessoais existentes.
 
 ## n8n: receber dados
 
@@ -40,7 +40,7 @@ Mensagem recebida no WhatsApp:
 Confirmação recebida pelo fluxo (obtenha a autorização do participante antes de enviar `consent: true`):
 
 ```json
-{"event_id":"confirmacao-id-unico","type":"registration.completed","contest_id":1,"name":"Nome do participante","cpf":"CPF_VALIDO_COM_11_DIGITOS","phone":"5511999999999","code":"CODIGO_DO_LINK_DO_GRUPO","consent":true}
+{"event_id":"confirmacao-id-unico","type":"registration.completed","contest_id":"550e8400-e29b-41d4-a716-446655440000","name":"Nome do participante","cpf":"CPF_VALIDO_COM_11_DIGITOS","phone":"5511999999999","pix_type":"email","pix_key":"colaborador@example.com","code":"CODIGO_DO_LINK_DO_GRUPO","consent":true}
 ```
 
 `code` é opcional. Se informado, deve pertencer ao concurso. `event_id` é obrigatório e único globalmente; reenvios retornam `{ "ok": true, "duplicate": true }`. A gravação do evento e seus dados é transacional. Retornos: 200 aceito, 400 dados inválidos, 401 token inválido, 429 limite por minuto. O fluxo deve manter o mesmo event_id nas tentativas do mesmo evento.
@@ -70,3 +70,17 @@ CPF e telefone são restritos ao painel, mas armazenados em texto no banco local
 `src/app.js`: rotas e fluxos; `src/db.js`: esquema SQLite; `src/validation.js`: validações; `src/views.js`: componentes HTML com escape; `public/style.css`: interface responsiva; `test/app.test.js`: testes de autenticação, CSRF, cadastro, atribuição, duplicatas e webhook.
 
 Referências: [Express 5](https://expressjs.com/en/5x/api.html) e [SQLite no Node.js](https://nodejs.org/api/sqlite.html). O módulo SQLite do Node 22 pode emitir um aviso experimental.
+
+## Cadastros de trabalhadores e identificadores
+
+Na tela de gerenciamento do concurso, **Finalizar cadastros** retira o concurso do portal público e bloqueia cadastros pelo formulário, links compartilhados e webhook. Os participantes existentes permanecem no painel. **Reabrir cadastros** torna o concurso público novamente. Enquanto finalizado, o bot e os lembretes vinculados também ficam indisponíveis para novos envios.
+
+Os identificadores internos de concursos, participantes, grupos, FAQs, lembretes, mensagens e demais registros usam UUID v4. Rotas e APIs recebem UUIDs em texto, inclusive `contest_id`, `group_id` e `processing_id`; IDs numéricos antigos deixam de ser aceitos. Os códigos curtos `/l/:codigo` e identificadores externos do WhatsApp/n8n são preservados.
+
+Ao iniciar a versão atual, a migração transacional converte o banco existente e seus vínculos, mantendo os dados e removendo a coluna de taxa. Atualize referências numéricas que tiver configurado em fluxos externos com os UUIDs obtidos no painel/API. Reinicie o servidor após atualizar o código; em `npm run dev`, o processo reinicia automaticamente.
+
+## Chave Pix do colaborador
+
+Novos cadastros exigem `pix_type` (`cpf`, `celular`, `email` ou `aleatoria`) e `pix_key`, tanto no formulário quanto no evento `registration.completed` do n8n. O sistema valida o formato, sem consultar a existência ou titularidade da chave no banco. Celular aceita DDD com número brasileiro e é salvo com `+55`; CPF é salvo sem pontuação.
+
+O tipo e a chave completa ficam disponíveis na lista protegida de trabalhadores e na API administrativa de participantes. Não aparecem no portal público. Chaves são armazenadas em texto no banco local, inclusive quando o tipo é CPF; a proteção por hash do CPF de identificação não se aplica à chave usada para pagamentos. Cadastros anteriores permanecem com Pix não informado. Reenvios do mesmo CPF no mesmo concurso mantêm a chave existente. Exclusão e retenção do cadastro também removem seus dados Pix.
