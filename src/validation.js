@@ -43,9 +43,10 @@ export function registration(body) {
 const coreFields = ['title','organizer','role','vacancies','salary','location','arrival','starts','ends','deadline','official_url','notes'];
 const dates=['arrival','starts','ends','deadline'];
 export const fields = [...coreFields,...dates.map(k=>k+'_utc')];
-export function contest(body) {
+export function contest(body,existing={}) {
+  body={...body,role:existing.role??'',salary:existing.salary??'',vacancies:existing.vacancies??0};
   const data = Object.fromEntries(coreFields.map(key => [key, String(body[key] ?? '').trim()]));
-  for (const key of coreFields.filter(key => key !== 'notes')) if (!data[key] || data[key].length > 2000) throw new Error('Preencha todos os campos obrigatórios.');
+  for (const key of coreFields.filter(key => !['notes','role','salary'].includes(key))) if (!data[key] || data[key].length > 2000) throw new Error('Preencha todos os campos obrigatórios.');
   if (!Number.isSafeInteger(Number(data.vacancies)) || Number(data.vacancies) < 0) throw new Error('Número de vagas inválido.');
   if (!/^https?:\/\//.test(data.official_url)) throw new Error('Use um link oficial HTTP ou HTTPS.');
   try { new URL(data.official_url); } catch { throw new Error('Link oficial inválido.'); }

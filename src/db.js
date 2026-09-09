@@ -3,6 +3,7 @@ import { mkdirSync } from 'node:fs';
 import { migrate } from './migrations.js';
 import { randomUUID } from 'node:crypto';
 import { migrateUuids } from './uuid-migration.js';
+import { migrateStaffing } from './staffing.js';
 
 export function database(path = 'data/concurso.sqlite') {
   if (path !== ':memory:') mkdirSync('data', { recursive: true });
@@ -34,5 +35,6 @@ export function database(path = 'data/concurso.sqlite') {
     PRAGMA optimize;`);
   migrate(db);
   migrateUuids(db);
+  migrateStaffing(db);
   return db;
 }

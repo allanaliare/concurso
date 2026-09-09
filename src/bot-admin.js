@@ -3,6 +3,7 @@ import { fail, id, text } from './bot-service.js';
 import { maskCpf, maskPhone } from './privacy.js';
 import { contest, fields } from './validation.js';
 import { localToUtc } from './dates.js';
+import { staffing } from './staffing.js';
 
 const check=(label,name,value=true)=>`<label class="check"><input type="checkbox" name="${name}" value="1" ${value?'checked':''}>${label}</label>`;
 const heading=(title,description='')=>`<div class="heading"><div><p class="eyebrow">AUTOMAÇÃO DE CONCURSOS</p><h1>${title}</h1><p>${description}</p></div></div>`;
@@ -49,10 +50,10 @@ export function mountBotAdmin(app,db,s,page,guard) {
   app.put('/api/grupos/:id',(req,res)=>res.json(s.group(req.body,req.params.id)));
   app.get('/api/concursos/:id',(req,res)=>res.json(s.getContest(req.params.id)));
   app.post('/api/concursos',(req,res)=>{const c=contest(req.body);const r=db.prepare(`INSERT INTO contests(${fields.join(',')}) VALUES(${fields.map(()=>'?').join(',')}) RETURNING id`).get(...fields.map(k=>c[k]));s.audit('concurso.criado',r.id);res.status(201).json(s.getContest(r.id));});
-  app.put('/api/concursos/:id',(req,res)=>{const old=s.getContest(req.params.id),c=contest(req.body);db.prepare(`UPDATE contests SET ${fields.map(k=>`${k}=?`).join(',')} WHERE id=?`).run(...fields.map(k=>c[k]),old.id);s.audit('concurso.atualizado',old.id);res.json(s.getContest(old.id));});
+  app.put('/api/concursos/:id',(req,res)=>{const old=s.getContest(req.params.id),c=contest(req.body,old);db.prepare(`UPDATE contests SET ${fields.map(k=>`${k}=?`).join(',')} WHERE id=?`).run(...fields.map(k=>c[k]),old.id);s.audit('concurso.atualizado',old.id);res.json(s.getContest(old.id));});
   app.post('/api/concursos/:id/faqs',(req,res)=>res.status(201).json(s.faq(req.body,req.params.id)));
   app.put('/api/faqs/:id',(req,res)=>{const f=db.prepare('SELECT * FROM faqs WHERE id=?').get(id(req.params.id));if(!f)fail('FAQ não encontrada.',404);res.json(s.faq(req.body,f.contest_id,f.id));});
   app.delete('/api/faqs/:id',(req,res)=>{const result=db.prepare('DELETE FROM faqs WHERE id=?').run(id(req.params.id));if(!result.changes)fail('FAQ não encontrada.',404);s.audit('faq.excluida',req.params.id);res.json({ok:true});});
   app.post('/api/concursos/:id/lembretes',(req,res)=>{if(s.getGroup(req.body.group_id).contest_id!==id(req.params.id))fail('Grupo não pertence ao concurso.');res.status(201).json(s.reminder(req.body));});
-  app.get('/api/concursos/:id/participantes',(req,res)=>{s.getContest(req.params.id);res.json(db.prepare('SELECT id,name,phone,cpf_final,pix_type,pix_key,source,created_at FROM registrations WHERE contest_id=? ORDER BY created_at DESC,rowid DESC LIMIT 500').all(id(req.params.id)).map(r=>({...r,phone:maskPhone(r.phone),cpf_final:undefined,cpf:maskCpf(r.cpf_final),confirmed:true})));});
+  app.get('/api/concursos/:id/participantes',(req,res)=>{s.getContest(req.params.id);res.json(db.prepare('SELECT id,name,phone,cpf_final,pix_type,pix_key,source,created_at FROM registrations WHERE contest_id=? ORDER BY created_at DESC,rowid DESC LIMIT 500').all(id(req.params.id)).map(r=>({...r,phone:maskPhone(r.phone),cpf_final:undefined,cpf:maskCpf(r.cpf_final),confirmed:true,roles:staffing(db).assigned(r.id)})));});
 }

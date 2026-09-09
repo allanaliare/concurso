@@ -84,3 +84,13 @@ Ao iniciar a versão atual, a migração transacional converte o banco existente
 Novos cadastros exigem `pix_type` (`cpf`, `celular`, `email` ou `aleatoria`) e `pix_key`, tanto no formulário quanto no evento `registration.completed` do n8n. O sistema valida o formato, sem consultar a existência ou titularidade da chave no banco. Celular aceita DDD com número brasileiro e é salvo com `+55`; CPF é salvo sem pontuação.
 
 O tipo e a chave completa ficam disponíveis na lista protegida de trabalhadores e na API administrativa de participantes. Não aparecem no portal público. Chaves são armazenadas em texto no banco local, inclusive quando o tipo é CPF; a proteção por hash do CPF de identificação não se aplica à chave usada para pagamentos. Cadastros anteriores permanecem com Pix não informado. Reenvios do mesmo CPF no mesmo concurso mantêm a chave existente. Exclusão e retenção do cadastro também removem seus dados Pix.
+
+## Cargos e vínculos dos colaboradores
+
+No gerenciamento do concurso, abra **Cadastrar / gerenciar cargos** para adicionar nome, período (`1` = Manhã, `2` = Tarde, `3` = Manhã e Tarde), valor em reais e quantidade de vagas. O valor é a remuneração pelo trabalho no período cadastrado. As vagas exibidas no concurso são a soma das quantidades dos cargos configurados.
+
+Em **Trabalhadores → Definir cargos**, somente o organizador atribui ou remove os cargos. Um colaborador pode ter um cargo de manhã e outro à tarde no mesmo concurso; um cargo de Manhã e Tarde ocupa ambos os períodos. Não é permitido ultrapassar a quantidade de vagas, reduzir a quantidade abaixo dos vínculos existentes, excluir um cargo vinculado ou alterar seu período gerando conflito. Remover o colaborador também libera suas vagas.
+
+O formulário público e o webhook cadastram o colaborador sem cargo; campos de atribuição enviados por essas entradas não são utilizados. Os cargos são exibidos como informação no portal. Cadastros existentes permanecem sem atribuição até a decisão do organizador. O campo antigo de funções é preservado como um cargo pendente de configuração, incluindo a remuneração anterior como referência. Revise e separe esse cadastro caso ele contenha várias funções. Nenhum período é presumido na migração.
+
+API administrativa (sessão autenticada e CSRF): `GET/POST /api/concursos/:uuid/cargos`, `PUT/DELETE /api/concursos/:uuid/cargos/:cargo_uuid`. Para salvar um cargo, envie `name`, `period`, `amount` (reais, até duas casas decimais) e `quantity`. Para substituir os vínculos, use `PUT /api/participantes/:uuid/cargos` com `{ "role_ids": ["UUID_DO_CARGO"] }`; uma lista vazia remove todos. A lista administrativa de participantes inclui seus cargos em `roles`.

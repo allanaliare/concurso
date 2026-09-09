@@ -1,6 +1,7 @@
 import { randomBytes, createHmac } from 'node:crypto';
 import { redact } from './privacy.js';
 import { localToUtc } from './dates.js';
+import { staffing, periods } from './staffing.js';
 export { localToUtc } from './dates.js';
 
 export const fail = (message,status=400) => { throw Object.assign(new Error(message),{status}); };
@@ -24,6 +25,7 @@ export function matchFaq(question,faqs) {
 }
 export function botService(db,config) {
   const now=()=>new Date().toISOString();
+  const staff=staffing(db);
   const audit=(action,target)=>db.prepare('INSERT INTO audit(actor,action,target) VALUES(?,?,?)').run('administrador',action,String(target));
   const getContest=value=>db.prepare('SELECT * FROM contests WHERE id=?').get(id(value))||fail('Concurso não encontrado.',404);
   const getGroup=value=>db.prepare('SELECT * FROM groups WHERE id=?').get(id(value))||fail('Grupo não encontrado.',404);
@@ -147,7 +149,7 @@ export function botService(db,config) {
         else if(/\bvagas\b/.test(q))answer=`Vagas: ${c.vacancies}. Cargos: ${c.role}.`;
         else if(/\b(inscricao|inscrever|inscricoes)\b/.test(q))answer=`Cadastros para trabalhar até ${c.deadline.replace('T',' às ')} (Brasília). ${confirmation(g)}`;
         else if(/\bedital\b/.test(q))answer=c.edital_url?`Edital: ${c.edital_url}`:c.fallback;
-        result=answer?{action:'SEND_GROUP_MESSAGE',instance,target:remote,text:redact(answer).slice(0,500)}:{action:'ASK_AI',instance,target:remote,question,context:{finalidade:'Cadastro gratuito de trabalhadores para o concurso',concurso:c.title,cargo:c.role,vagas:c.vacancies,local:c.location,inicio:c.starts,chegada:c.arrival,termino:c.ends,inscricoesAte:c.deadline,fuso:'America/Sao_Paulo',linkEdital:c.edital_url,informacoes:redact(c.ai_context+'\n'+c.notes).slice(0,12000),faqs:faqs.map(f=>({pergunta:redact(f.question),resposta:redact(f.answer)}))},fallback:c.fallback,maxCharacters:500};
+        result=answer?{action:'SEND_GROUP_MESSAGE',instance,target:remote,text:redact(answer).slice(0,500)}:{action:'ASK_AI',instance,target:remote,question,context:{finalidade:'Cadastro gratuito de trabalhadores para o concurso',concurso:c.title,cargo:c.role,cargos:staff.list(c.id).filter(r=>r.period&&r.amount_cents!==null).map(r=>({nome:r.name,periodo:periods[r.period],valor:r.amount_cents/100,quantidade:r.quantity})),atribuicaoCargos:'Somente o organizador define os cargos dos colaboradores.',vagas:c.vacancies,local:c.location,inicio:c.starts,chegada:c.arrival,termino:c.ends,inscricoesAte:c.deadline,fuso:'America/Sao_Paulo',linkEdital:c.edital_url,informacoes:redact(c.ai_context+'\n'+c.notes).slice(0,12000),faqs:faqs.map(f=>({pergunta:redact(f.question),resposta:redact(f.answer)}))},fallback:c.fallback,maxCharacters:500};
         if(result.text&&db.prepare("SELECT id FROM bot_messages WHERE group_id=? AND response=? AND action<>'IGNORE' AND created_at>? LIMIT 1").get(g.id,result.text,new Date(Date.now()-60000).toISOString()))result=ignore('GROUP_REPEAT_LIMIT');
       }
       const r=db.prepare('INSERT INTO bot_messages(instance,message_id,group_id,sender_hash,question,response,action,status,created_at,contest_id) VALUES(?,?,?,?,?,?,?,?,?,?) RETURNING id').get(instance,messageId,g.id,sender,question,result.text||'',result.action,result.action==='IGNORE'?'IGNORADO':result.action==='ASK_AI'?'AGUARDANDO_IA':'PREPARADO',now(),c.id);

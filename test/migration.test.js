@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { migrate } from '../src/migrations.js';
 import { database } from '../src/db.js';
+import { staffing } from '../src/staffing.js';
 
 test('migra dados legados para UUID e preserva vínculos após reabrir o banco',()=>{
   const folder=mkdtempSync(join(tmpdir(),'concurso-uuid-'));
@@ -21,7 +22,7 @@ test('migra dados legados para UUID e preserva vínculos após reabrir o banco',
       CREATE TABLE registrations(id INTEGER PRIMARY KEY,contest_id INTEGER REFERENCES contests(id),
         name TEXT,cpf TEXT,phone TEXT,code TEXT REFERENCES links(code),source TEXT,created_at TEXT,
         UNIQUE(contest_id,cpf));
-      INSERT INTO contests(id,title,fee,active) VALUES(42,'Equipe antiga',0,0);
+      INSERT INTO contests(id,title,fee,active,role,salary,vacancies) VALUES(42,'Equipe antiga',0,0,'Fiscal / Apoio','100 por turno',3);
       INSERT INTO links VALUES('link-antigo',42,'Equipe');
       INSERT INTO registrations VALUES(9,42,'Pessoa','hash','11999999999','link-antigo','formulario','2026-09-01');
     `);
@@ -43,6 +44,13 @@ test('migra dados legados para UUID e preserva vínculos após reabrir o banco',
     assert.equal(contest.title,'Equipe antiga');
     assert.equal(contest.active,0);
     assert.equal('fee' in contest,false);
+    const legacyRole=db.prepare('SELECT * FROM roles').get();
+    assert.equal(legacyRole.name,'Fiscal / Apoio');
+    assert.equal(legacyRole.period,null);
+    assert.equal(legacyRole.amount_cents,null);
+    assert.equal(legacyRole.legacy_amount,'100 por turno');
+    assert.equal(legacyRole.quantity,3);
+    assert.equal(legacyRole.contest_id,contest.id);
     const group=db.prepare('SELECT * FROM groups').get();
     for(const table of ['links','registrations','groups','faqs','reminders','bot_messages'])
       assert.equal(db.prepare(`SELECT contest_id FROM ${table}`).get().contest_id,contest.id);
@@ -63,5 +71,13 @@ test('migra dados legados para UUID e preserva vínculos após reabrir o banco',
     db.close();
     db=database(path);
     assert.equal(db.prepare('SELECT pix_key FROM registrations').get().pix_key,'pessoa@example.com');
+    const staff=staffing(db),registrationId=db.prepare('SELECT id FROM registrations').get().id;
+    assert.throws(()=>staff.assign(registrationId,[legacyRole.id]),/configurado/);
+    staff.save(contest.id,{name:'Fiscal',period:1,amount:100,quantity:3},legacyRole.id);
+    staff.assign(registrationId,[legacyRole.id]);
+    db.close();
+    db=database(path);
+    assert.equal(staffing(db).assigned(registrationId)[0].id,legacyRole.id);
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM roles').get().n,1);
   } finally { db.close(); rmSync(folder,{recursive:true,force:true}); }
 });
