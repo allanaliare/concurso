@@ -111,6 +111,8 @@ test('painel cadastra cargos e atribui colaboradores; visitante não escolhe car
     const registrations=await request(`/admin/registrations?contest=${contestId}`);
     assert.match(registrations.text,/Fiscal · Manhã/);
     assert.match(registrations.text,/Imprimir lista/);
+    assert.match(registrations.text,/Cadastrar colaborador/);
+    assert.match(registrations.text,/Sem cargo definido/);
     assert.match(registrations.text,/CPF/);
     assert.match(registrations.text,/Nome/);
     assert.match(registrations.text,/Cargo/);
@@ -123,6 +125,12 @@ test('painel cadastra cargos e atribui colaboradores; visitante não escolhe car
     assert.equal(signup.res.status,200);
     const newPerson=db.prepare("SELECT id FROM registrations WHERE name='Pessoa nova'").get();
     assert.equal(s.assigned(newPerson.id).length,0);
+    const withoutRole=await request(`/admin/registrations?contest=${contestId}&role=none`);
+    assert.match(withoutRole.text,/Pessoa nova/);
+    assert.doesNotMatch(withoutRole.text,/Pessoa A/);
+    const byRole=await request(`/admin/registrations?contest=${contestId}&role=${morning.id}`);
+    assert.match(byRole.text,/Pessoa A/);
+    assert.doesNotMatch(byRole.text,/Pessoa nova/);
     const print=await request(`/admin/contests/${contestId}/registrations/print`);
     assert.equal(print.res.status,200);
     assert.match(print.text,/LISTA DE PAGAMENTO/);
