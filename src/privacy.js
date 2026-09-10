@@ -14,7 +14,7 @@ export function privacy(db, secret) {
   if(legacy.length) {
     db.exec('BEGIN IMMEDIATE');
     try {
-      for(const r of legacy)db.prepare('UPDATE registrations SET cpf=?,cpf_final=? WHERE id=?').run(hash(r.cpf),r.cpf.slice(-4),r.id);
+      for(const r of legacy)db.prepare('UPDATE registrations SET cpf=?,cpf_final=?,cpf_full=? WHERE id=?').run(hash(r.cpf),r.cpf.slice(-4),r.cpf,r.id);
       db.exec('COMMIT');
     } catch(error){db.exec('ROLLBACK');throw error;}
     db.exec('VACUUM; PRAGMA wal_checkpoint(TRUNCATE);');

@@ -1,3 +1,4 @@
+import { actorContext } from './accounts.js';
 import { randomBytes, createHmac } from 'node:crypto';
 import { redact } from './privacy.js';
 import { localToUtc } from './dates.js';
@@ -26,7 +27,7 @@ export function matchFaq(question,faqs) {
 export function botService(db,config) {
   const now=()=>new Date().toISOString();
   const staff=staffing(db);
-  const audit=(action,target)=>db.prepare('INSERT INTO audit(actor,action,target) VALUES(?,?,?)').run('administrador',action,String(target));
+  const audit=(action,target)=>db.prepare('INSERT INTO audit(actor,action,target) VALUES(?,?,?)').run(actorContext.getStore()?`${actorContext.getStore().name} (${actorContext.getStore().username}) [${actorContext.getStore().id}]`:'sistema',action,String(target));
   const getContest=value=>db.prepare('SELECT * FROM contests WHERE id=?').get(id(value))||fail('Concurso não encontrado.',404);
   const getGroup=value=>db.prepare('SELECT * FROM groups WHERE id=?').get(id(value))||fail('Grupo não encontrado.',404);
   function group(body,groupId) {

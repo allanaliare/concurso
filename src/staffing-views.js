@@ -6,7 +6,10 @@ export function roleSummary(roles) {
 }
 
 export function publicRoles(roles) {
-  return `<h3>Cargos de trabalho</h3>${table(['Cargo','Período','Valor','Quantidade'],roles.filter(r=>r.period&&r.amount_cents!==null).map(r=>[esc(r.name),periods[r.period],money(r.amount_cents/100),r.quantity]),'O organizador ainda está definindo os cargos.')}<p>O organizador atribuirá os cargos aos colaboradores após o cadastro.</p>`;
+  const ready=roles.filter(r=>r.period&&r.amount_cents!==null);
+  return `<section class="role-section"><div class="section-heading"><h3>Cargos e vagas</h3><span class="muted">${ready.length} ${ready.length===1?'cargo':'cargos'}</span></div>
+    <div class="role-list">${ready.length?ready.map(r=>`<article class="role-card"><div class="role-card-heading"><h4>${esc(r.name)}</h4><span class="period-badge">${periods[r.period]}</span></div><div class="role-card-facts"><div><span>Valor pelo trabalho</span><strong>${money(r.amount_cents/100)}</strong></div><div><span>Vagas previstas</span><strong>${r.quantity}</strong></div></div></article>`).join(''):'<p class="muted">O organizador ainda está definindo os cargos.</p>'}</div>
+    <p class="role-note">O organizador atribuirá os cargos aos colaboradores após o cadastro.</p></section>`;
 }
 
 export function rolesPage(contest,roles,token,draft=null) {

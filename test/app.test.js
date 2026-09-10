@@ -31,7 +31,7 @@ test('envio ao n8n registra aceite e falha HTTP',async()=>{
     return res;
   }
   try {
-    await request('/login');await request('/login',{password:'test-password'});await request('/admin/messages');
+    await request('/login');await request('/login',{username:'admin',password:'test-password'});await request('/admin/messages');
     await request('/admin/messages',{phone:'5511999999999',body:'Mensagem de teste'});
     assert.equal(received.auth,'Bearer out-secret');assert.equal(received.body.type,'whatsapp.send');
     assert.equal(db.prepare('SELECT status FROM messages ORDER BY rowid ASC LIMIT 1').get().status,'aceito pelo n8n');
@@ -55,8 +55,8 @@ test('fluxo completo, autenticação, atribuição e idempotência',async()=>{
   try {
     assert.equal((await request('/admin')).response.status,302);
     await request('/login');
-    assert.equal((await request('/login',{password:'wrong'})).response.status,401);
-    assert.equal((await request('/login',{password:'senha-de-teste-123'})).response.status,302);
+    assert.equal((await request('/login',{username:'admin',password:'wrong'})).response.status,401);
+    assert.equal((await request('/login',{username:'admin',password:'senha-de-teste-123'})).response.status,302);
     await request('/admin');
     assert.doesNotMatch((await request('/admin/contests/new')).text,/name="fee"/);
     const c={title:'Concurso Teste',organizer:'Banca',role:'Analista',vacancies:'12',salary:'R$ 5.000',location:'São Paulo',arrival:'2026-12-01T12:00',starts:'2026-12-01T13:00',ends:'2026-12-01T17:00',deadline:'2026-11-01T18:00',official_url:'https://example.com',notes:'Documento com foto'};
@@ -106,6 +106,8 @@ test('fluxo completo, autenticação, atribuição e idempotência',async()=>{
     assert.equal((await request(`/concursos/${contestId}/confirmar`,{...person,_csrf:'invalid'})).response.status,403);
     assert.doesNotMatch((await request('/admin/registrations')).text,/529\.982\.247-25/);
     assert.equal(db.prepare('SELECT length(cpf) n FROM registrations').get().n,64);
+    assert.equal(db.prepare('SELECT cpf_full FROM registrations').get().cpf_full,'52998224725');
+    assert.match((await request('/admin/registrations')).text,/52998224725/);
     const hook=async(data,auth='Bearer test-token')=>fetch(base+'/api/webhooks/n8n',{method:'POST',headers:{'Content-Type':'application/json',Authorization:auth},body:JSON.stringify(data)});
     const event={event_id:'event-1',type:'whatsapp.message',phone:'5511999999999',message:'Olá'};
     assert.equal((await hook(event,'bad')).status,401);

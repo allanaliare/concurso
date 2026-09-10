@@ -47,4 +47,7 @@ export function migrate(db) {
     ALTER TABLE registrations ADD COLUMN pix_type TEXT CHECK(pix_type IN ('cpf','celular','email','aleatoria'));
     ALTER TABLE registrations ADD COLUMN pix_key TEXT;
     INSERT INTO schema_migrations(version) VALUES(5); COMMIT;`);
+  if(!db.prepare('SELECT 1 FROM schema_migrations WHERE version=7').get())db.exec(`BEGIN IMMEDIATE;
+    ALTER TABLE registrations ADD COLUMN cpf_full TEXT;
+    INSERT INTO schema_migrations(version) VALUES(7); COMMIT;`);
 }

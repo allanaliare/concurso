@@ -1,4 +1,5 @@
 import express from 'express';
+import { migrateAccounts, accounts, SQLiteSessions, actorContext, enforceBackOffice, accessibleContests, mountAccounts } from './accounts.js';
 import session from 'express-session';
 import helmet from 'helmet';
 import { randomBytes, timingSafeEqual, createHash } from 'node:crypto';
@@ -9,11 +10,14 @@ import { privacy, maskCpf, maskPhone, redact } from './privacy.js';
 import { botService, id } from './bot-service.js';
 import { botRouter } from './bot-routes.js';
 import { mountBotAdmin } from './bot-admin.js';
+import { mountManualRegistration } from './manual-registration.js';
 import { staffing } from './staffing.js';
 import { mountStaffing, roleSummary, publicRoles } from './staffing-views.js';
 
 const safeEqual = (a,b) => { const hash = v => createHash('sha256').update(String(v ?? '')).digest(); return timingSafeEqual(hash(a),hash(b)); };
 export function createApp(config, db=database()) {
+  migrateAccounts(db,config);
+  const users=accounts(db);
   const personal=privacy(db,config.cpfSecret);
   const bot=botService(db,config);
   const staff=staffing(db);
@@ -25,10 +29,16 @@ export function createApp(config, db=database()) {
   app.use(express.urlencoded({extended:false,limit:'32kb'}));
   app.use(express.json({limit:'32kb'}));
   app.use('/api/bot',botRouter(bot,config));
-  app.use(session({secret:config.sessionSecret,resave:false,saveUninitialized:false,cookie:{httpOnly:true,sameSite:'lax',secure:config.production,maxAge:8*60*60*1000}}));
+  app.use(session({store:new SQLiteSessions(db),secret:config.sessionSecret,resave:false,saveUninitialized:false,cookie:{httpOnly:true,sameSite:'lax',secure:config.production,maxAge:8*60*60*1000}}));
   app.use((req,res,next)=>{res.set('Cache-Control','no-store'); req.session.csrf ??= randomBytes(24).toString('hex');next();});
-  const page=(req,res,title,body,status=200,error='')=>res.status(status).send(layout(title,body,{admin:!!req.session.admin,token:req.session.csrf,error}));
-  const guard=(req,res,next)=>req.session.admin?next():res.redirect('/login');
+  app.use((req,res,next)=>{
+    const user=req.session.userId?users.get(req.session.userId):null;
+    req.user=user?.active&&user.auth_version===req.session.authVersion?user:null;
+    req.session.admin=!!req.user;
+    actorContext.run(req.user,next);
+  });
+  const page=(req,res,title,body,status=200,error='')=>res.status(status).send(layout(title,body,{admin:!!req.user,user:req.user,token:req.session.csrf,error}));
+  const guard=(req,res,next)=>req.user?next():res.redirect('/login');
   const attempts=new Map();
   function limit(req,res,next) {
     const now=Date.now(), key=req.ip+req.path;
@@ -42,10 +52,12 @@ export function createApp(config, db=database()) {
     if(['POST','PUT','PATCH','DELETE'].includes(req.method) && req.path!=='/api/webhooks/n8n' && !safeEqual(req.body?._csrf??req.get('x-csrf-token'),req.session.csrf)) return page(req,res,'Sessão expirada','<h1>Recarregue a página e tente novamente.</h1>',403);
     next();
   });
-  app.get('/login',(req,res)=>page(req,res,'Entrar',`<section class="login panel"><p class="eyebrow">ÁREA DO ORGANIZADOR</p><h1>Bom ter você aqui.</h1><p>Acesse seus concursos e acompanhe os cadastros para trabalhar.</p><form method="post">${csrf(req.session.csrf)}${input('Senha de acesso','password','','password')}<button>Entrar no painel →</button></form></section>`));
-  app.post('/login',limit,(req,res,next)=>{
-    if(!safeEqual(req.body.password,config.adminPassword)) return page(req,res,'Acesso negado','<h1>Senha incorreta.</h1><a href="/login">Tentar novamente</a>',401);
-    req.session.regenerate(error=>{if(error)return next(error);req.session.admin=true;req.session.csrf=randomBytes(24).toString('hex');req.session.save(error=>error?next(error):res.redirect('/admin'));});
+  app.use(enforceBackOffice(db));
+  app.get('/login',(req,res)=>page(req,res,'Entrar',`<section class="login panel"><p class="eyebrow">ÁREA DO ORGANIZADOR</p><h1>Bom ter você aqui.</h1><p>Acesse seus concursos e acompanhe os cadastros para trabalhar.</p><form method="post">${csrf(req.session.csrf)}${input('Login','username','','text','autocomplete="username"')}${input('Senha de acesso','password','','password','autocomplete="current-password"')}<button>Entrar no painel →</button></form></section>`));
+  app.post('/login',limit,async(req,res,next)=>{
+    const user=await users.authenticate(req.body.username,req.body.password);
+    if(!user) return page(req,res,'Acesso negado','<h1>Login ou senha incorretos.</h1><a href="/login">Tentar novamente</a>',401);
+    req.session.regenerate(error=>{if(error)return next(error);req.session.userId=user.id;req.session.authVersion=user.auth_version;req.session.admin=true;req.session.csrf=randomBytes(24).toString('hex');req.session.save(error=>error?next(error):res.redirect('/admin'));});
   });
   app.post('/logout',(req,res)=>req.session.destroy(()=>res.redirect('/login')));
   app.get('/',(req,res)=>page(req,res,'Concursos',`<div class="heading"><div><p class="eyebrow">SEU PRÓXIMO PASSO</p><h1>Concursos em destaque</h1><p>Cadastre-se gratuitamente para trabalhar nos concursos disponíveis.</p></div></div>${cards(db.prepare('SELECT * FROM contests WHERE active=1 ORDER BY deadline').all())}`));
@@ -67,7 +79,7 @@ export function createApp(config, db=database()) {
     const c=getContest(id); if(!c.active)throw new Error('Cadastros finalizados para este concurso.');
     const data=registration(body), code=getCode(body.code,c.id);
     if(body.code && !code)throw new Error('Link de grupo inválido para este concurso.');
-    const result=db.prepare('INSERT INTO registrations(contest_id,name,cpf,phone,code,source,cpf_final,consent_at,pix_type,pix_key) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(contest_id,cpf) DO NOTHING').run(c.id,data.name,personal.hash(data.cpf),data.phone,code,source,data.cpf.slice(-4),new Date().toISOString(),data.pix_type,data.pix_key);
+    const result=db.prepare('INSERT INTO registrations(contest_id,name,cpf,phone,code,source,cpf_final,consent_at,pix_type,pix_key,cpf_full) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(contest_id,cpf) DO UPDATE SET cpf_full=excluded.cpf_full').run(c.id,data.name,personal.hash(data.cpf),data.phone,code,source,data.cpf.slice(-4),new Date().toISOString(),data.pix_type,data.pix_key,data.cpf);
     return {created:result.changes>0};
   }
   app.post('/concursos/:id/confirmar',limit,(req,res)=>{
@@ -76,11 +88,13 @@ export function createApp(config, db=database()) {
     page(req,res,'Cadastro recebido','<section class="panel empty"><span class="badge">RECEBIDO</span><h1>Cadastro recebido!</h1><p>Os dados enviados foram processados. Se este CPF já estava cadastrado, o registro anterior foi mantido.</p><a class="button" href="/">Voltar aos concursos</a></section>');
   });
   app.use('/admin',guard);
+  mountAccounts(app,db,users,page);
   mountBotAdmin(app,db,bot,page,guard);
   mountStaffing(app,db,staff,page,guard,bot.audit);
+  mountManualRegistration(app,db,personal,page,bot.audit);
   app.get('/admin',(req,res)=>{
-    const all=db.prepare('SELECT * FROM contests ORDER BY active DESC, deadline').all();
-    const count=t=>db.prepare(`SELECT COUNT(*) n FROM ${t}`).get().n;
+    const all=db.prepare(`SELECT * FROM contests WHERE id IN (${accessibleContests()}) ORDER BY active DESC, deadline`).all();
+    const count=t=>db.prepare(`SELECT COUNT(*) n FROM ${t} WHERE ${t==='clicks'?`code IN (SELECT code FROM links WHERE contest_id IN (${accessibleContests()}))`:`contest_id IN (${accessibleContests()})`}`).get().n;
     page(req,res,'Visão geral',`<div class="heading"><div><p class="eyebrow">PAINEL DO ORGANIZADOR</p><h1>Visão geral</h1><p>Acompanhe o caminho do primeiro clique à confirmação.</p></div><a class="button" href="/admin/contests/new">＋ Novo concurso</a></div><section class="stats">${[['Concursos publicados',all.filter(c=>c.active).length],['Cliques nos links',count('clicks')],['Cadastros recebidos',count('registrations')],['Grupos com link',count('links')]].map(([label,n])=>`<div><span>${label}</span><strong>${n}</strong></div>`).join('')}</section><div class="section-heading"><h2>Seus concursos</h2><span class="muted">${all.length} cadastrados</span></div>${cards(all,true)}`);
   });
   app.get('/admin/contests/new',(req,res)=>page(req,res,'Novo concurso',contestForm({},req.session.csrf)));
@@ -88,7 +102,7 @@ export function createApp(config, db=database()) {
     let c;
     try { c=contest(req.body); }
     catch(error) { return page(req,res,'Novo concurso',contestForm(req.body,req.session.csrf),400,error.message); }
-    const result=db.prepare(`INSERT INTO contests(${fields.join(',')}) VALUES(${fields.map(()=>'?').join(',')}) RETURNING id`).get(...fields.map(k=>c[k])); bot.audit('concurso.criado',result.id); res.redirect(`/admin/contests/${result.id}`);
+    const result=db.prepare(`INSERT INTO contests(${fields.join(',')},owner_id) VALUES(${fields.map(()=>'?').join(',')},?) RETURNING id`).get(...fields.map(k=>c[k]),req.user.id); bot.audit('concurso.criado',result.id); res.redirect(`/admin/contests/${result.id}`);
   });
   app.get('/admin/contests/:id/edit',(req,res)=>page(req,res,'Editar concurso',contestForm(getContest(req.params.id),req.session.csrf)));
   app.post('/admin/contests/:id/edit',(req,res)=>{
@@ -103,14 +117,14 @@ export function createApp(config, db=database()) {
     const c=getContest(req.params.id);
     const links=db.prepare(`SELECT l.*, (SELECT COUNT(*) FROM clicks WHERE code=l.code) clicks, (SELECT COUNT(DISTINCT visitor) FROM clicks WHERE code=l.code) visitors, (SELECT COUNT(*) FROM registrations WHERE code=l.code) confirmations FROM links l WHERE contest_id=?`).all(c.id);
     const clicks=db.prepare('SELECT l.group_name,c.created_at FROM clicks c JOIN links l ON l.code=c.code WHERE l.contest_id=? ORDER BY c.created_at DESC,c.rowid DESC LIMIT 50').all(c.id);
-    page(req,res,c.title,`<a class="back" href="/admin">← Visão geral</a><div class="heading"><div><p class="eyebrow">CONCURSO · ${c.active?'CADASTROS ABERTOS':'CADASTROS FINALIZADOS'}</p><h1>${esc(c.title)}</h1><p>${esc(c.organizer)}</p></div><a class="button secondary" href="/admin/contests/${c.id}/edit">Editar informações</a></div><div class="toolbar"><a class="button secondary" href="/admin/contests/${c.id}/roles">Cadastrar / gerenciar cargos</a><a href="/admin/contests/${c.id}/bot">FAQs e configuração do bot</a><a href="/concursos/${c.id}">Abrir página pública ↗</a><a href="/admin/registrations?contest=${c.id}">Ver cadastros →</a><form method="post" action="/admin/contests/${c.id}/${c.active?'close':'reopen'}">${csrf(req.session.csrf)}<button class="text">${c.active?'Finalizar cadastros':'Reabrir cadastros'}</button></form></div><section class="panel"><h2>Links por grupo</h2><p>Compartilhe um link diferente em cada grupo para acompanhar sua origem.</p><form class="inline" method="post" action="/admin/contests/${c.id}/links">${csrf(req.session.csrf)}${input('Nome do grupo','group_name','','text','maxlength="100"')}<button>Criar link curto</button></form>${table(['Grupo','Link para compartilhar','Cliques','Visitantes¹','Confirmações'],links.map(l=>[esc(l.group_name),`<a href="/l/${l.code}">${esc(config.baseUrl)}/l/${l.code}</a>`,l.clicks,l.visitors,l.confirmations]))}<small>¹ Estimativa por sessão do navegador. Cliques incluem repetições e podem incluir prévias automáticas do WhatsApp.</small></section><section class="panel"><h2>Acessos recentes</h2><p>Visitantes anônimos só são identificados após uma confirmação. Últimos 50 acessos.</p>${table(['Grupo','Data (UTC)'],clicks.map(c=>[esc(c.group_name),esc(c.created_at)]))}</section>`);
+    page(req,res,c.title,`<a class="back" href="/admin">← Visão geral</a><div class="heading"><div><p class="eyebrow">CONCURSO · ${c.active?'CADASTROS ABERTOS':'CADASTROS FINALIZADOS'}</p><h1>${esc(c.title)}</h1><p>${esc(c.organizer)}</p></div><a class="button secondary" href="/admin/contests/${c.id}/edit">Editar informações</a></div><div class="toolbar"><a class="button" href="/admin/contests/${c.id}/registrations/new">Cadastrar colaborador</a><a class="button secondary" href="/admin/contests/${c.id}/roles">Cadastrar / gerenciar cargos</a><a href="/admin/contests/${c.id}/bot">FAQs e configuração do bot</a><a href="/concursos/${c.id}">Abrir página pública ↗</a><a href="/admin/registrations?contest=${c.id}">Ver cadastros →</a><form method="post" action="/admin/contests/${c.id}/${c.active?'close':'reopen'}">${csrf(req.session.csrf)}<button class="text">${c.active?'Finalizar cadastros':'Reabrir cadastros'}</button></form></div><section class="panel"><h2>Links por grupo</h2><p>Compartilhe um link diferente em cada grupo para acompanhar sua origem.</p><form class="inline" method="post" action="/admin/contests/${c.id}/links">${csrf(req.session.csrf)}${input('Nome do grupo','group_name','','text','maxlength="100"')}<button>Criar link curto</button></form>${table(['Grupo','Link para compartilhar','Cliques','Visitantes¹','Confirmações'],links.map(l=>[esc(l.group_name),`<a href="/l/${l.code}">${esc(config.baseUrl)}/l/${l.code}</a>`,l.clicks,l.visitors,l.confirmations]))}<small>¹ Estimativa por sessão do navegador. Cliques incluem repetições e podem incluir prévias automáticas do WhatsApp.</small></section><section class="panel"><h2>Acessos recentes</h2><p>Visitantes anônimos só são identificados após uma confirmação. Últimos 50 acessos.</p>${table(['Grupo','Data (UTC)'],clicks.map(c=>[esc(c.group_name),esc(c.created_at)]))}</section>`);
   });
   app.post('/admin/contests/:id/links',(req,res)=>{const c=getContest(req.params.id),group=String(req.body.group_name??'').trim();if(!group||group.length>100)throw new Error('Informe um nome de grupo com até 100 caracteres.');db.prepare('INSERT INTO links(code,contest_id,group_name) VALUES(?,?,?)').run(randomBytes(6).toString('base64url'),c.id,group);res.redirect(`/admin/contests/${c.id}`);});
   app.get('/admin/registrations',(req,res)=>{
     const filter=req.query.contest?id(req.query.contest):null;
-    const rows=db.prepare(`SELECT r.*, c.title,l.group_name FROM registrations r JOIN contests c ON c.id=r.contest_id LEFT JOIN links l ON l.code=r.code ${filter?'WHERE r.contest_id=?':''} ORDER BY r.created_at DESC,r.rowid DESC LIMIT 500`).all(...(filter?[filter]:[]));
-    const contests=db.prepare('SELECT id,title FROM contests').all();
-    page(req,res,'Trabalhadores',`<div class="heading"><div><p class="eyebrow">ACOMPANHAMENTO</p><h1>Cadastros para trabalhar</h1><p>Dados declarados pelos participantes. Até 500 registros recentes.</p></div></div><section class="panel"><form class="inline" method="get"><label>Concurso<select name="contest"><option value="">Todos os concursos</option>${contests.map(c=>`<option value="${c.id}" ${filter===c.id?'selected':''}>${esc(c.title)}</option>`).join('')}</select></label><button class="secondary">Filtrar</button></form>${table(['Nome / WhatsApp','CPF','Pix','Concurso','Cargos / períodos / valores','Grupo','Origem','Data (UTC)','Ações'],rows.map(r=>[`${esc(r.name)}<small>${esc(maskPhone(r.phone))}</small>`,esc(maskCpf(r.cpf_final)),r.pix_key?`${esc(pixTypes[r.pix_type])}<small>${esc(r.pix_key)}</small>`:'Não informado',esc(r.title),roleSummary(staff.assigned(r.id)),esc(r.group_name||'Direto'),esc(r.source),esc(r.created_at),`<a href="/admin/registrations/${r.id}/roles">Definir cargos</a><form method="post" action="/admin/registrations/${r.id}/delete">${csrf(req.session.csrf)}<button class="text">Excluir dados</button></form>`]))}</section>`);
+    const rows=db.prepare(`SELECT r.*, c.title,l.group_name FROM registrations r JOIN contests c ON c.id=r.contest_id LEFT JOIN links l ON l.code=r.code WHERE r.contest_id IN (${accessibleContests()}) ${filter?'AND r.contest_id=?':''} ORDER BY r.created_at DESC,r.rowid DESC LIMIT 500`).all(...(filter?[filter]:[]));
+    const contests=db.prepare(`SELECT id,title FROM contests WHERE id IN (${accessibleContests()})`).all();
+    page(req,res,'Trabalhadores',`<div class="heading"><div><p class="eyebrow">ACOMPANHAMENTO</p><h1>Cadastros para trabalhar</h1><p>Dados declarados pelos participantes. Até 500 registros recentes.</p></div></div><section class="panel"><form class="inline" method="get"><label>Concurso<select name="contest"><option value="">Todos os concursos</option>${contests.map(c=>`<option value="${c.id}" ${filter===c.id?'selected':''}>${esc(c.title)}</option>`).join('')}</select></label><button class="secondary">Filtrar</button></form>${table(['Nome / WhatsApp','CPF','Pix','Concurso','Cargos / períodos / valores','Grupo','Origem','Data (UTC)','Ações'],rows.map(r=>[`${esc(r.name)}<small>${esc(maskPhone(r.phone))}</small>`,esc(r.cpf_full|| (r.cpf_final?maskCpf(r.cpf_final)+' (completar CPF)':'Não informado')),r.pix_key?`${esc(pixTypes[r.pix_type])}<small>${esc(r.pix_key)}</small>`:'Não informado',esc(r.title),roleSummary(staff.assigned(r.id)),esc(r.group_name||'Direto'),esc(r.source),esc(r.created_at),`<a href="/admin/registrations/${r.id}/edit">Editar dados</a> <a href="/admin/registrations/${r.id}/roles">Definir cargos</a><form method="post" action="/admin/registrations/${r.id}/delete">${csrf(req.session.csrf)}<button class="text">Excluir dados</button></form>`]))}</section>`);
   });
   app.get('/admin/messages',(req,res)=>{
     const rows=db.prepare('SELECT * FROM messages ORDER BY created_at DESC,rowid DESC LIMIT 100').all();

@@ -89,7 +89,7 @@ test('migração de CPF legado, detecção de chave trocada e retenção',()=>{
   try {
     db.prepare("INSERT INTO registrations(contest_id,name,cpf,phone,source,created_at) VALUES(?,'Pessoa','52998224725','11999999999','formulario','2020-01-01')").run(contestId);
     privacy(db,config.cpfSecret);
-    const r=db.prepare('SELECT * FROM registrations').get();assert.equal(r.cpf.length,64);assert.equal(r.cpf_final,'4725');
+    const r=db.prepare('SELECT * FROM registrations').get();assert.equal(r.cpf.length,64);assert.equal(r.cpf_final,'4725');assert.equal(r.cpf_full,'52998224725');
     assert.throws(()=>privacy(db,'z'.repeat(40)),/não corresponde/);
     purgeExpired(db,180);assert.equal(db.prepare('SELECT COUNT(*) n FROM registrations').get().n,0);
   }finally{db.close();}

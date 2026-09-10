@@ -15,7 +15,7 @@ Edite `.env`: defina `ADMIN_PASSWORD` com pelo menos 12 caracteres e `SESSION_SE
 npm start
 ```
 
-Abra http://localhost:3000 e acesse **Área do organizador** com sua senha. Não há senha padrão nem dados fictícios. Cadastre um concurso, crie os links dos grupos em sua tela de gerenciamento e compartilhe-os. Use `npm run dev` durante desenvolvimento e `npm test` para os testes de integração.
+Abra http://localhost:3000 e acesse **Área do organizador** com login `admin` (ou `ADMIN_USERNAME`) e a senha inicial `ADMIN_PASSWORD`. Não há senha padrão nem dados fictícios. Cadastre um concurso, crie os links dos grupos em sua tela de gerenciamento e compartilhe-os. Use `npm run dev` durante desenvolvimento e `npm test` para os testes de integração.
 
 ## Funcionalidades
 
@@ -61,7 +61,7 @@ O servidor escuta apenas em `127.0.0.1`. Para links em celulares e n8n externo, 
 
 Antes de operar publicamente, configure TLS e `NODE_ENV=production`; cookies seguros precisam que Express reconheça HTTPS. Para proxy local confiável, configure `app.set('trust proxy', 'loopback')` na criação do app e garanta que só o proxy alcance o servidor. Não confie indiscriminadamente em headers de proxies externos.
 
-Esta primeira versão usa um único administrador e sessões em memória (reiniciar encerra os logins). Para múltiplos processos/uso ampliado, adote armazenamento persistente de sessões, limites compartilhados e contas individuais. O limitador atual é por IP e rota, 30 tentativas/minuto para login, confirmação, cliques e webhook.
+O back-office usa contas individuais e sessões persistentes em SQLite. Administradores gerenciam usuários e todos os concursos; gestores acessam somente seus próprios concursos. Para múltiplos processos, os limites por IP ainda precisam de armazenamento compartilhado. O limitador atual é por IP e rota, 30 tentativas/minuto para login, confirmação, cliques e webhook.
 
 CPF e telefone são restritos ao painel, mas armazenados em texto no banco local. Restrinja acesso ao arquivo e aos backups, use criptografia de disco e estabeleça retenção/remoção dos dados. Para backup consistente simples, pare o servidor e copie a pasta `data` inteira. Não versione `.env` ou `data`. Datas de prova são informadas em horário de Brasília; eventos no histórico são exibidos em UTC.
 
@@ -94,3 +94,17 @@ Em **Trabalhadores → Definir cargos**, somente o organizador atribui ou remove
 O formulário público e o webhook cadastram o colaborador sem cargo; campos de atribuição enviados por essas entradas não são utilizados. Os cargos são exibidos como informação no portal. Cadastros existentes permanecem sem atribuição até a decisão do organizador. O campo antigo de funções é preservado como um cargo pendente de configuração, incluindo a remuneração anterior como referência. Revise e separe esse cadastro caso ele contenha várias funções. Nenhum período é presumido na migração.
 
 API administrativa (sessão autenticada e CSRF): `GET/POST /api/concursos/:uuid/cargos`, `PUT/DELETE /api/concursos/:uuid/cargos/:cargo_uuid`. Para salvar um cargo, envie `name`, `period`, `amount` (reais, até duas casas decimais) e `quantity`. Para substituir os vínculos, use `PUT /api/participantes/:uuid/cargos` com `{ "role_ids": ["UUID_DO_CARGO"] }`; uma lista vazia remove todos. A lista administrativa de participantes inclui seus cargos em `roles`.
+
+## Cadastro manual e CPF completo
+
+No painel do concurso, **Cadastrar colaborador** permite salvar somente o nome. CPF, telefone e Pix são opcionais nessa entrada; quando preenchidos, são validados. Após salvar, o organizador pode definir os cargos. Use **Trabalhadores → Editar dados** para completar o cadastro posteriormente. Vários colaboradores sem CPF podem ser cadastrados no mesmo concurso; quando informado, o CPF permanece único por concurso. O formulário público mantém seus campos obrigatórios.
+
+O CPF completo passa a ser armazenado em `cpf_full`, sem pontuação, e fica disponível no painel e na API administrativa. O hash em `cpf` continua sendo usado para localizar duplicatas. Cadastros antigos que só possuem hash precisam ter o CPF informado novamente, pois ele não pode ser reconstruído. CPFs legados ainda em texto são preservados antes da conversão para hash. Os dados completos não são exibidos no portal público.
+
+## Back-office com usuários individuais
+
+O primeiro acesso cria uma conta de administrador com login `admin` (personalizável por `ADMIN_USERNAME`) e a senha de `ADMIN_PASSWORD`, entre 12 e 128 caracteres. Os concursos anteriores são atribuídos a essa conta. Após a criação inicial, as senhas ficam no banco com scrypt e salt individual; alterar `ADMIN_PASSWORD` não redefine uma conta existente. Essa variável só é necessária na criação do primeiro administrador. Mantenha `SESSION_SECRET` estável para preservar sessões entre reinicializações.
+
+Em **Usuários**, o administrador pode cadastrar contas, alterar nome/login/perfil, definir uma nova senha e desativar acessos. Os perfis são **Administrador** (todos os concursos e gestão de usuários) e **Gestor de concursos** (somente os próprios concursos, colaboradores, cargos, grupos e lembretes). O proprietário de um novo concurso é sempre o usuário autenticado, inclusive na API. O portal público continua exibindo concursos publicados de todos os organizadores. Histórico global e central de mensagens são exclusivos do administrador.
+
+Sessões são persistidas no SQLite, expiram após oito horas e são invalidadas quando a senha, o perfil ou a ativação da conta mudam. O sistema impede desativar ou rebaixar o último administrador ativo. As ações registradas no histórico identificam o usuário responsável por nome, login e UUID. Entradas administrativas e APIs verificam o proprietário dos recursos; informar o UUID de outro gestor não concede acesso.
