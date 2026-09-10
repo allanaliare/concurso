@@ -108,7 +108,12 @@ test('painel cadastra cargos e atribui colaboradores; visitante não escolhe car
     assert.doesNotMatch(publicPage.text,/name="role_ids"/);
     assert.equal((await request(`/admin/registrations/${a}/roles`,{role_ids:[morning.id,afternoon.id]})).res.status,302);
     assert.equal(s.assigned(a).length,2);
-    assert.match((await request('/admin/registrations')).text,/Fiscal · Manhã/);
+    const registrations=await request(`/admin/registrations?contest=${contestId}`);
+    assert.match(registrations.text,/Fiscal · Manhã/);
+    assert.match(registrations.text,/Imprimir lista/);
+    assert.match(registrations.text,/CPF/);
+    assert.match(registrations.text,/Nome/);
+    assert.match(registrations.text,/Cargo/);
     assert.equal((await request(`/admin/registrations/${b}/roles`,{role_ids:morning.id})).res.status,400);
     assert.equal((await request(`${url}/${afternoon.id}`,{name:'Apoio',period:1,quantity:1,amount:200})).res.status,400);
     assert.equal((await request(`/admin/contests/${contestId}/edit`,contestBody)).res.status,302);
@@ -118,6 +123,12 @@ test('painel cadastra cargos e atribui colaboradores; visitante não escolhe car
     assert.equal(signup.res.status,200);
     const newPerson=db.prepare("SELECT id FROM registrations WHERE name='Pessoa nova'").get();
     assert.equal(s.assigned(newPerson.id).length,0);
+    const print=await request(`/admin/contests/${contestId}/registrations/print`);
+    assert.equal(print.res.status,200);
+    assert.match(print.text,/LISTA DE PAGAMENTO/);
+    assert.match(print.text,/QR Pix/);
+    assert.match(print.text,/Pessoa nova/);
+    assert.match(print.text,/paid-box/);
     assert.equal((await request(`/admin/registrations/${a}/roles`,{})).res.status,302);
     assert.equal(s.assigned(a).length,0);
     assert.equal((await request(`/admin/registrations/${b}/roles`,{role_ids:morning.id,_csrf:'bad'})).res.status,403);
