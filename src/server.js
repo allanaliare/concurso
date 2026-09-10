@@ -17,4 +17,4 @@ const app=createApp({adminPassword:env.ADMIN_PASSWORD,adminUsername:env.ADMIN_US
 purgeExpired(db,Number(env.RETENTION_DAYS||180));
 setInterval(()=>purgeExpired(db,Number(env.RETENTION_DAYS||180)),3600000).unref();
 app
-  .listen(port,'127.0.0.1',()=>console.log(`Ponto de Prova disponível em http://localhost:${port}`));
+  .listen(port,'0.0.0.0',()=>console.log(`Ponto de Prova disponível em http://localhost:${port}`));
