@@ -1,6 +1,6 @@
 # Ponto de Prova
 
-Sistema de cadastro gratuito de pessoas interessadas em trabalhar em concursos, em português, com front e back no mesmo projeto: Express 5, páginas HTML renderizadas no servidor e SQLite em `data/concurso.sqlite`. Requer Node.js 22.13 ou superior. Sem serviço externo de banco.
+Sistema de cadastro gratuito de pessoas interessadas em trabalhar em concursos, em português, com front e back no mesmo projeto: Express 5, páginas HTML renderizadas no servidor e SQLite configurável por `DATABASE_PATH` (padrão `data/concurso.sqlite`; em container, use `/app/data/concurso.sqlite`). Requer Node.js 22.13 ou superior. Sem serviço externo de banco.
 
 ## Executar localmente
 
@@ -9,13 +9,29 @@ npm install
 Copy-Item .env.example .env
 ```
 
-Edite `.env`: defina `ADMIN_PASSWORD` com pelo menos 12 caracteres e `SESSION_SECRET` com pelo menos 32 caracteres aleatórios. Gere segredos com `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`. Defina outro segredo em `WEBHOOK_TOKEN` para o n8n.
+Edite `.env`: defina `ADMIN_PASSWORD` com pelo menos 12 caracteres e `SESSION_SECRET` com pelo menos 32 caracteres aleatórios. Gere segredos com `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`. Defina outro segredo em `WEBHOOK_TOKEN` para o n8n. Use `DATABASE_PATH` para apontar onde o banco SQLite persistente será salvo; se você já tem dados em `data/concurso.sqlite`, mantenha esse arquivo ou copie-o para o novo caminho antes de iniciar.
 
 ```powershell
 npm start
 ```
 
 Abra http://localhost:3000 e acesse **Área do organizador** com login `admin` (ou `ADMIN_USERNAME`) e a senha inicial `ADMIN_PASSWORD`. Não há senha padrão nem dados fictícios. Cadastre um concurso, crie os links dos grupos em sua tela de gerenciamento e compartilhe-os. Use `npm run dev` durante desenvolvimento e `npm test` para os testes de integração.
+
+## Deploy com volume persistente
+
+O projeto inclui `Dockerfile` e `docker-compose.yml` prontos para manter o SQLite em um volume separado. No container, configure:
+
+```env
+DATABASE_PATH=/app/data/concurso.sqlite
+```
+
+Na EasyPanel, adicione um **Volume** montado em:
+
+```text
+/app/data
+```
+
+Depois faça o deploy/redeploy. O banco e os arquivos auxiliares do SQLite (`concurso.sqlite`, `concurso.sqlite-wal` e `concurso.sqlite-shm`) ficarão nesse volume, fora da camada descartável do container. Se você tiver um banco antigo recuperado, pare o app, envie esses arquivos para o volume montado em `/app/data` e inicie novamente.
 
 ## Funcionalidades
 
@@ -63,11 +79,11 @@ Antes de operar publicamente, configure TLS e `NODE_ENV=production`; cookies seg
 
 O back-office usa contas individuais e sessões persistentes em SQLite. Administradores gerenciam usuários e todos os concursos; gestores acessam somente seus próprios concursos. Para múltiplos processos, os limites por IP ainda precisam de armazenamento compartilhado. O limitador atual é por IP e rota, 30 tentativas/minuto para login, confirmação, cliques e webhook.
 
-CPF e telefone são restritos ao painel, mas armazenados em texto no banco local. Restrinja acesso ao arquivo e aos backups, use criptografia de disco e estabeleça retenção/remoção dos dados. Para backup consistente simples, pare o servidor e copie a pasta `data` inteira. Não versione `.env` ou `data`. Datas de prova são informadas em horário de Brasília; eventos no histórico são exibidos em UTC.
+CPF e telefone são restritos ao painel, mas armazenados em texto no banco local. Restrinja acesso ao arquivo definido em `DATABASE_PATH` e aos backups, use criptografia de disco e estabeleça retenção/remoção dos dados. Para backup consistente simples, pare o servidor e copie o arquivo do banco e seus arquivos auxiliares `-wal` e `-shm`, quando existirem. Não versione `.env` ou `data`. Datas de prova são informadas em horário de Brasília; eventos no histórico são exibidos em UTC.
 
 ## Estrutura
 
-`src/app.js`: rotas e fluxos; `src/db.js`: esquema SQLite; `src/validation.js`: validações; `src/views.js`: componentes HTML com escape; `public/style.css`: interface responsiva; `test/app.test.js`: testes de autenticação, CSRF, cadastro, atribuição, duplicatas e webhook.
+`src/app.js`: rotas e fluxos; `src/db.js`: conexão e esquema SQLite; `src/validation.js`: validações; `src/views.js`: componentes HTML com escape; `public/style.css`: interface responsiva; `test/app.test.js`: testes de autenticação, CSRF, cadastro, atribuição, duplicatas e webhook.
 
 Referências: [Express 5](https://expressjs.com/en/5x/api.html) e [SQLite no Node.js](https://nodejs.org/api/sqlite.html). O módulo SQLite do Node 22 pode emitir um aviso experimental.
 

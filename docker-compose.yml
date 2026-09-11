@@ -1,0 +1,26 @@
+services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      BASE_URL: ${BASE_URL:-http://localhost:3000}
+      DATABASE_PATH: /app/data/concurso.sqlite
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      SESSION_SECRET: ${SESSION_SECRET}
+      CPF_HMAC_SECRET: ${CPF_HMAC_SECRET}
+      BOT_INTERNAL_TOKEN: ${BOT_INTERNAL_TOKEN}
+      RETENTION_DAYS: ${RETENTION_DAYS:-180}
+      TRUST_LOCAL_PROXY: ${TRUST_LOCAL_PROXY:-false}
+      WEBHOOK_TOKEN: ${WEBHOOK_TOKEN}
+      N8N_OUTBOUND_URL: ${N8N_OUTBOUND_URL}
+      N8N_OUTBOUND_TOKEN: ${N8N_OUTBOUND_TOKEN}
+    volumes:
+      - concurso-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  concurso-data:
