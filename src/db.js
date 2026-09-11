@@ -1,4 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
+import { dirname } from 'node:path';
 import { mkdirSync } from 'node:fs';
 import { migrate } from './migrations.js';
 import { randomUUID } from 'node:crypto';
@@ -6,7 +7,7 @@ import { migrateUuids } from './uuid-migration.js';
 import { migrateStaffing } from './staffing.js';
 
 export function database(path = 'data/concurso.sqlite') {
-  if (path !== ':memory:') mkdirSync('data', { recursive: true });
+  if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
   const db = new DatabaseSync(path);
   db.function('uuid', () => randomUUID());
   db.exec(`PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;
