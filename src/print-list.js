@@ -2,12 +2,12 @@ import QRCode from 'qrcode';
 import { accessibleContests } from './accounts.js';
 import { periods } from './staffing.js';
 import { esc, table, money } from './views.js';
-import { maskPhone } from './privacy.js';
 import { id } from './bot-service.js';
 import { pixTypes } from './validation.js';
 
 const ascii = value => String(value ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^\x20-\x7E]/g,'').trim();
 const tlv = (id,value) => `${id}${String(value).length.toString().padStart(2,'0')}${value}`;
+const formatCpf = value => String(value ?? '').replace(/^(\d{3})(\d{3})(\d{3})(\d{2})$/,'$1.$2.$3-$4');
 
 function crc16(payload) {
   let crc=0xffff;
@@ -36,7 +36,7 @@ export function mountPrintList(app,db,staff,page) {
       if(!contestId) throw Object.assign(new Error('Selecione um concurso para imprimir.'),{status:400});
       const contest=db.prepare(`SELECT * FROM contests WHERE id=? AND id IN (${accessibleContests()})`).get(contestId);
       if(!contest) throw Object.assign(new Error('Concurso nao encontrado.'),{status:404});
-      const roles=staff.list(contest.id).filter(r=>r.period&&r.amount_cents!==null);
+      const roles=staff.list(contest.id);
       const people=db.prepare(`SELECT r.*, l.group_name FROM registrations r LEFT JOIN links l ON l.code=r.code
         WHERE r.contest_id=? ORDER BY r.name COLLATE NOCASE,r.created_at`).all(contest.id);
       const links=db.prepare('SELECT rr.registration_id,rr.role_id FROM registration_roles rr JOIN roles ro ON ro.id=rr.role_id WHERE ro.contest_id=?').all(contest.id);
@@ -47,19 +47,19 @@ export function mountPrintList(app,db,staff,page) {
         const payload=pixPayload(person,contest);
         if(payload) qrByPerson.set(person.id,await QRCode.toString(payload,{type:'svg',width:92,margin:1,errorCorrectionLevel:'M'}));
       }
-      const rowsFor=rows=>table(['Pago','Nome','WhatsApp','CPF','Pix','QR Pix','Grupo'],rows.map(person=>[
-        '<span class="paid-box"></span>',
+      const rowsFor=rows=>table(['CPF','Nome','Pix','QR Code'],rows.map(person=>[
+        esc(formatCpf(person.cpf_full)),
         esc(person.name),
-        esc(maskPhone(person.phone)),
-        esc(person.cpf_full||''),
         person.pix_key?`${esc(pixTypes[person.pix_type]||person.pix_type)}<small>${esc(person.pix_key)}</small>`:'Nao informado',
-        qrByPerson.get(person.id)?`<div class="pix-qr">${qrByPerson.get(person.id)}</div>`:'Sem Pix',
-        esc(person.group_name||'Direto')
+        qrByPerson.get(person.id)?`<div class="pix-qr">${qrByPerson.get(person.id)}</div>`:'Sem Pix'
       ]),'Nenhum colaborador neste grupo.');
       const sections=roles.map(role=>{
         const rows=people.filter(person=>(byPerson.get(person.id)||[]).includes(role.id));
-        return `<section class="print-group"><div class="print-group-title"><h2>${esc(role.name)}</h2><span>${periods[role.period]} - ${money(role.amount_cents/100)} - ${rows.length}/${role.quantity}</span></div>${rowsFor(rows)}</section>`;
-      });
+        const details=role.period&&role.amount_cents!==null
+          ? `${periods[role.period]} - ${money(role.amount_cents/100)} - ${rows.length}/${role.quantity}`
+          : `${rows.length} colaborador${rows.length===1?'':'es'} - cargo pendente de periodo e valor`;
+        return {count:rows.length,name:role.name,html:`<section class="print-group"><div class="print-group-title"><h2>${esc(role.name)}</h2><span>${details}</span></div>${rowsFor(rows)}</section>`};
+      }).sort((a,b)=>b.count-a.count || a.name.localeCompare(b.name,'pt-BR')).map(section=>section.html);
       const withoutRole=people.filter(person=>!(byPerson.get(person.id)||[]).length);
       if(withoutRole.length) sections.push(`<section class="print-group"><div class="print-group-title"><h2>Sem cargo definido</h2><span>${withoutRole.length} colaborador${withoutRole.length===1?'':'es'}</span></div>${rowsFor(withoutRole)}</section>`);
       page(req,res,'Lista de pagamento',`<div class="print-actions"><a class="back" href="/admin/registrations?contest=${contest.id}">Voltar aos colaboradores</a><button type="button" onclick="window.print()">Imprimir</button></div><section class="print-head"><p class="eyebrow">LISTA DE PAGAMENTO</p><h1>${esc(contest.title)}</h1><p>${esc(contest.organizer)} - ${esc(contest.location)}</p></section>${sections.join('')||'<div class="empty muted">Nenhum colaborador cadastrado.</div>'}`);
