@@ -13,18 +13,16 @@ export function publicRoles(roles) {
 }
 
 export function rolesPage(contest,roles,token,draft=null) {
-  const form=(r={})=>`<form class="panel form-grid" method="post" action="/admin/contests/${contest.id}/roles${r.id?'/'+r.id:''}">
-    ${csrf(token)}${input('Nome do cargo','name',r.name??'','text','maxlength="150"')}
-    <label>Período<select name="period" required><option value="">Selecione</option>${Object.entries(periods).map(([v,label])=>`<option value="${v}" ${String(r.period)===v?'selected':''}>${label}</option>`).join('')}</select></label>
-    ${input('Valor pelo trabalho (R$)','amount',r.amount??(r.amount_cents==null?'':(r.amount_cents/100).toFixed(2)),'number','min="0" step="0.01"')}
-    ${input('Quantidade de vagas','quantity',r.quantity??'','number',`min="${r.assigned??0}" step="1"`)}
-    ${r.amount_cents===null&&r.legacy_amount?`<p>Remuneração informada anteriormente: ${esc(r.legacy_amount)}. Informe o valor deste cargo acima.</p>`:''}
-    ${r.id?`<p>${r.assigned??0} colaboradores vinculados.${!r.period||r.amount_cents===null?' Complete o período e o valor para permitir vínculos.':''}</p>`:''}
-    <button>${r.id?'Salvar alterações':'Adicionar cargo'}</button></form>
-    ${r.id?`<form method="post" action="/admin/contests/${contest.id}/roles/${r.id}/delete">${csrf(token)}<button class="text">Excluir cargo</button></form>`:''}`;
-  return `<a class="back" href="/admin/contests/${contest.id}">← Gerenciar concurso</a><h1>Cargos — ${esc(contest.title)}</h1>
-    <p>Cadastre cada função com seu período, valor e quantidade. Os vínculos dos colaboradores são definidos pelo organizador.</p>
-    ${roles.map(r=>form(draft?.id===r.id?{...r,...draft}:r)).join('')}<h2>Novo cargo</h2>${form(draft&&!draft.id?draft:{})}`;
+  const periodSelect=r=>`<select name="period" required><option value="">Selecione</option>${Object.entries(periods).map(([v,label])=>`<option value="${v}" ${String(r.period)===v?'selected':''}>${label}</option>`).join('')}</select>`;
+  const amount=r=>r.amount??(r.amount_cents==null?'':(r.amount_cents/100).toFixed(2));
+  const row=r=>{
+    const formId=`role-${r.id}`;
+    return `<tr><td data-label="Cargo"><form id="${formId}" method="post" action="/admin/contests/${contest.id}/roles/${r.id}">${csrf(token)}</form><input form="${formId}" name="name" value="${esc(r.name)}" maxlength="150" required>${r.amount_cents===null&&r.legacy_amount?`<small>Remuneração anterior: ${esc(r.legacy_amount)}</small>`:''}</td><td data-label="Período"><select form="${formId}" name="period" required><option value="">Selecione</option>${Object.entries(periods).map(([v,label])=>`<option value="${v}" ${String(r.period)===v?'selected':''}>${label}</option>`).join('')}</select></td><td data-label="Valor"><input form="${formId}" name="amount" type="number" min="0" step="0.01" value="${esc(amount(r))}" required></td><td data-label="Vagas"><input form="${formId}" name="quantity" type="number" min="${r.assigned??0}" step="1" value="${esc(r.quantity)}" required><small>${r.assigned??0} vinculado${r.assigned===1?'':'s'}</small></td><td data-label="Ações"><button form="${formId}">Salvar</button><form method="post" action="/admin/contests/${contest.id}/roles/${r.id}/delete">${csrf(token)}<button class="text">Excluir</button></form></td></tr>`;
+  };
+  const draftRow=draft&&!draft.id?draft:{};
+  return `<a class="back" href="/admin/contests/${contest.id}">← Gerenciar concurso</a><div class="contest-tabs"><a href="/admin/registrations?contest=${contest.id}">Colaboradores</a><a class="active" href="/admin/contests/${contest.id}/roles">Cargos</a><a href="/admin/contests/${contest.id}/rooms">Salas</a></div><div class="heading"><div><p class="eyebrow">CONFIGURAÇÃO</p><h1>Cargos — ${esc(contest.title)}</h1><p>Edite período, valor e vagas direto na tabela.</p></div></div>
+    <section class="panel"><h2>Novo cargo</h2><form class="inline role-create" method="post" action="/admin/contests/${contest.id}/roles">${csrf(token)}${input('Cargo','name',draftRow.name??'','text','maxlength="150"')}<label>Período${periodSelect(draftRow)}</label>${input('Valor (R$)','amount',draftRow.amount??'','number','min="0" step="0.01"')}${input('Vagas','quantity',draftRow.quantity??'','number','min="0" step="1"')}<button>Adicionar</button></form></section>
+    <section class="panel"><h2>Cargos cadastrados</h2>${roles.length?`<div class="table-wrap roles-table"><table><thead><tr><th>Cargo</th><th>Período</th><th>Valor</th><th>Vagas</th><th>Ações</th></tr></thead><tbody>${roles.map(r=>row(draft?.id===r.id?{...r,...draft}:r)).join('')}</tbody></table></div>`:'<div class="empty muted">Nenhum cargo cadastrado.</div>'}</section>`;
 }
 
 export function assignmentPage(person,contest,roles,selected,token) {

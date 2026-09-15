@@ -46,7 +46,7 @@ export function enforceBackOffice(db) {
     const owned=value=>typeof value==='string'&&!!db.prepare('SELECT id FROM contests WHERE id=? AND owner_id=?').get(value,req.user.id);
     const resources={contests:'contests',concursos:'contests',groups:'groups',grupos:'groups',reminders:'reminders',registrations:'registrations',participantes:'registrations',faqs:'faqs'};
     const parts=path.split('/').filter(Boolean),table=resources[parts[1]],value=parts[2];
-    if(table&&value&&value!=='new') {
+    if(table&&value&&!['new','import'].includes(value)) {
       const row=db.prepare(`SELECT ${table==='contests'?'id':'contest_id'} AS contest_id FROM ${table} WHERE id=?`).get(value);
       if(!row||!owned(row.contest_id))return res.sendStatus(404);
     }

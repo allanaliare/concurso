@@ -3,12 +3,24 @@ export const date = value => value ? esc(value.replace('T',' às ').replace(/^(\
 export const money = value => Number(value).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
 export const csrf = token => `<input type="hidden" name="_csrf" value="${esc(token)}">`;
 export function layout(title, body, {admin=false, user=null, token='', error=''} = {}) {
-  const brand='<span class="mark">P</span> ponto de prova';
-  const links=[['/admin','Visão geral'],['/admin/registrations','Colaboradores'],['/admin/groups','Grupos'],['/admin/reminders','Lembretes'],...(user?.role==='admin'?[['/admin/users','Usuários'],['/admin/history','Histórico'],['/admin/messages','WhatsApp']]:[])];
+  const icons={
+    menu:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>',
+    home:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 11 9-8 9 8v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>',
+    users:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+    groups:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 8h10M7 12h7M5 20l-3 2V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H7z"/></svg>',
+    clock:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 6v6l4 2M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0"/></svg>',
+    shield:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/></svg>',
+    history:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7M3 3v6h6M12 7v5l3 2"/></svg>',
+    message:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15a4 4 0 0 1-4 4H7l-4 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/></svg>',
+    external:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 3h6v6M10 14 21 3M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/></svg>',
+    logout:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg>'
+  };
+  const brand='ponto de prova';
+  const links=[['/admin','Visão geral','home'],['/admin/registrations','Colaboradores','users'],['/admin/groups','Grupos','groups'],['/admin/reminders','Lembretes','clock'],...(user?.role==='admin'?[['/admin/users','Usuários','shield'],['/admin/history','Histórico','history'],['/admin/messages','WhatsApp','message']]:[])];
   const notice=error?`<div role="alert" class="alert">${esc(error)}</div>`:'';
-  const header=admin?`<header class="bo-header"><a class="brand" href="/admin">${brand}<span class="brand-label">BACK-OFFICE</span></a><div class="account-info"><strong>${esc(user?.name)}</strong><span>${user?.role==='admin'?'Administrador':'Gestor de concursos'}</span></div></header>`:`<header><a class="brand" href="/">${brand}<span class="brand-label">CONCURSOS</span></a><nav><a href="/">Concursos</a><a href="/login">Área do organizador ↗</a></nav></header>`;
-  const navigation=admin?`<aside class="bo-sidebar"><p class="eyebrow">GERENCIAMENTO</p><nav aria-label="Back-office">${links.map(([href,label])=>`<a href="${href}">${label}</a>`).join('')}<a href="/" target="_blank" rel="noopener">Portal público ↗</a></nav><form method="post" action="/logout">${csrf(token)}<button class="secondary">Sair da conta</button></form></aside>`:'';
-  return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)} · Ponto de Prova</title><link rel="stylesheet" href="/style.css"></head><body class="${admin?'backoffice':'public-site'}">${header}<div class="${admin?'bo-layout':''}">${navigation}<main>${notice}${body}</main></div><footer>Ponto de Prova <span>Informação organizada.</span></footer></body></html>`;
+  const header=admin?`<header class="bo-header"><a class="brand" href="/admin">${brand}<span class="brand-label">BACK-OFFICE</span></a><div class="account-info"><strong>${esc(user?.name)}</strong><span>${user?.role==='admin'?'Administrador':'Gestor de concursos'}</span></div></header>`:`<header><a class="brand" href="/"><span class="mark">P</span>${brand}<span class="brand-label">CONCURSOS</span></a><nav><a href="/">Concursos</a><a href="/login">Área do organizador ↗</a></nav></header>`;
+  const navigation=admin?`<aside class="bo-sidebar"><button class="sidebar-toggle" type="button" data-sidebar-toggle aria-label="Ocultar ou mostrar menu">${icons.menu}</button><nav aria-label="Back-office">${links.map(([href,label,icon])=>`<a href="${href}" title="${label}">${icons[icon]}<span>${label}</span></a>`).join('')}<a href="/" target="_blank" rel="noopener" title="Portal público">${icons.external}<span>Portal público</span></a></nav><form method="post" action="/logout">${csrf(token)}<button class="secondary" title="Sair da conta">${icons.logout}<span>Sair</span></button></form></aside>`:'';
+  return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)} · Ponto de Prova</title><link rel="stylesheet" href="/style.css"></head><body class="${admin?'backoffice':'public-site'}">${header}<div class="${admin?'bo-layout':''}">${navigation}<main>${notice}${body}</main></div>${admin?'<script src="/layout.js" defer></script>':''}</body></html>`;
 }
 export function input(label,name,value='',type='text',extra='') {
   return `<label>${label}<input name="${name}" type="${type}" value="${esc(value)}" required ${extra}></label>`;
