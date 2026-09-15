@@ -17,7 +17,7 @@ export function rolesPage(contest,roles,token,draft=null) {
     ${csrf(token)}${input('Nome do cargo','name',r.name??'','text','maxlength="150"')}
     <label>Período<select name="period" required><option value="">Selecione</option>${Object.entries(periods).map(([v,label])=>`<option value="${v}" ${String(r.period)===v?'selected':''}>${label}</option>`).join('')}</select></label>
     ${input('Valor pelo trabalho (R$)','amount',r.amount??(r.amount_cents==null?'':(r.amount_cents/100).toFixed(2)),'number','min="0" step="0.01"')}
-    ${input('Quantidade de vagas','quantity',r.quantity??'','number','min="0" step="1"')}
+    ${input('Quantidade de vagas','quantity',r.quantity??'','number',`min="${r.assigned??0}" step="1"`)}
     ${r.amount_cents===null&&r.legacy_amount?`<p>Remuneração informada anteriormente: ${esc(r.legacy_amount)}. Informe o valor deste cargo acima.</p>`:''}
     ${r.id?`<p>${r.assigned??0} colaboradores vinculados.${!r.period||r.amount_cents===null?' Complete o período e o valor para permitir vínculos.':''}</p>`:''}
     <button>${r.id?'Salvar alterações':'Adicionar cargo'}</button></form>

@@ -111,7 +111,9 @@ test('painel cadastra cargos e atribui colaboradores; visitante não escolhe car
     const registrations=await request(`/admin/registrations?contest=${contestId}`);
     assert.match(registrations.text,/Fiscal · Manhã/);
     assert.match(registrations.text,/Imprimir lista/);
+    assert.match(registrations.text,/Comandas 80mm/);
     assert.match(registrations.text,/Cadastrar colaborador/);
+    assert.match(registrations.text,/Importar colaboradores/);
     assert.match(registrations.text,/Sem cargo definido/);
     assert.match(registrations.text,/CPF/);
     assert.match(registrations.text,/Nome/);
@@ -134,11 +136,102 @@ test('painel cadastra cargos e atribui colaboradores; visitante não escolhe car
     const print=await request(`/admin/contests/${contestId}/registrations/print`);
     assert.equal(print.res.status,200);
     assert.match(print.text,/LISTA DE PAGAMENTO/);
-    assert.match(print.text,/QR Pix/);
+    assert.match(print.text,/<th scope="col">CPF<\/th><th scope="col">Nome<\/th><th scope="col">Pix<\/th><th scope="col">QR Code<\/th>/);
     assert.match(print.text,/Pessoa nova/);
-    assert.match(print.text,/paid-box/);
+    assert.doesNotMatch(print.text,/<th scope="col">Pago<\/th>/);
+    assert.doesNotMatch(print.text,/<th scope="col">WhatsApp<\/th>/);
+    assert.doesNotMatch(print.text,/<th scope="col">Grupo<\/th>/);
+    const receipts=await request(`/admin/contests/${contestId}/registrations/receipts`);
+    assert.equal(receipts.res.status,200);
+    assert.match(receipts.text,/COMANDA DE PAGAMENTO/);
+    assert.match(receipts.text,/Pessoa A/);
+    assert.match(receipts.text,/Equipe de trabalho/);
+    assert.match(receipts.text,/R\$\s*300,00/);
+    assert.match(receipts.text,/@page\{size:80mm auto/);
+    assert.match(receipts.text,/Imprimir comandas 80mm/);
+    assert.match(receipts.text,/cortar aqui/);
     assert.equal((await request(`/admin/registrations/${a}/roles`,{})).res.status,302);
     assert.equal(s.assigned(a).length,0);
     assert.equal((await request(`/admin/registrations/${b}/roles`,{role_ids:morning.id,_csrf:'bad'})).res.status,403);
+  } finally {await new Promise(r=>server.close(r));db.close();}
+});
+
+test('painel importa colaboradores com cargo e Pix CPF sem duplicar registros',async()=>{
+  const {db,s,contestId}=fixture();
+  const server=createApp(config,db).listen(0,'127.0.0.1');
+  await new Promise(r=>server.once('listening',r));
+  const base=`http://127.0.0.1:${server.address().port}`;
+  let cookie='',token='';
+  async function request(path,data) {
+    const form=new URLSearchParams({_csrf:token});
+    for(const [key,value] of Object.entries(data||{})) form.append(key,value);
+    const res=await fetch(base+path,{redirect:'manual',headers:{cookie,...(data?{'Content-Type':'application/x-www-form-urlencoded'}:{})},...(data?{method:'POST',body:form}:{})});
+    cookie=res.headers.get('set-cookie')?.split(';')[0]||cookie;
+    const text=await res.text();token=text.match(/name="_csrf" value="([^"]+)"/)?.[1]||token;
+    return {res,text};
+  }
+  try {
+    await request('/login');
+    await request('/login',{username:'admin',password:config.adminPassword});
+    const importUrl=`/admin/contests/${contestId}/registrations/import`;
+    assert.match((await request(importUrl)).text,/cpf;nome;cargo/);
+    const content=[
+      '529.982.247-25;Pessoa Importada;Fiscal de sala',
+      '52998224725;Pessoa Duplicada;Fiscal de sala',
+      '111.444.777-35;Pessoa Apoio; fiscal de sala ',
+      '123;Pessoa Erro;Apoio'
+    ].join('\n');
+    const imported=await request(importUrl,{content});
+    assert.equal(imported.res.status,200);
+    assert.match(imported.text,/Importados<\/span><strong>2<\/strong>/);
+    assert.match(imported.text,/Ignorados<\/span><strong>1<\/strong>/);
+    assert.match(imported.text,/CPF inválido/);
+    assert.match(imported.text,/Cargos cadastrados automaticamente: Fiscal de sala/);
+    const rows=db.prepare('SELECT * FROM registrations WHERE contest_id=? AND source=? ORDER BY name').all(contestId,'importacao');
+    assert.equal(rows.length,2);
+    assert.deepEqual(rows.map(r=>r.pix_type),['cpf','cpf']);
+    assert.deepEqual(rows.map(r=>r.pix_key),['11144477735','52998224725']);
+    assert.deepEqual(rows.map(r=>r.phone),['','']);
+    assert.equal(s.list(contestId).filter(r=>r.name.toLowerCase()==='fiscal de sala').length,1);
+    const role=s.list(contestId).find(r=>r.name==='Fiscal de sala');
+    assert.equal(role.period,null);
+    assert.equal(role.amount_cents,null);
+    assert.equal(role.assigned,2);
+    assert.equal(s.assigned(rows[0].id)[0].id,role.id);
+    assert.equal(db.prepare('SELECT role FROM contests WHERE id=?').get(contestId).role,'Fiscal de sala');
+    assert.match((await request(`/admin/contests/${contestId}/roles`)).text,/min="2"/);
+    assert.equal((await request(`/admin/contests/${contestId}/roles/${role.id}`,{name:'Fiscal de sala',period:1,amount:'180.75',quantity:5})).res.status,302);
+    const updated=s.get(role.id);
+    assert.equal(updated.period,1);
+    assert.equal(updated.amount_cents,18075);
+    assert.equal(updated.quantity,5);
+    assert.equal(updated.name,'Fiscal de sala');
+    assert.equal(s.assigned(rows[0].id)[0].id,role.id);
+    assert.equal(db.prepare('SELECT vacancies FROM contests WHERE id=?').get(contestId).vacancies,5);
+    assert.equal((await request(`/admin/contests/${contestId}/roles`,{name:'Apoio extra',period:2,amount:'90',quantity:1})).res.status,302);
+    const extra=s.list(contestId).find(r=>r.name==='Apoio extra');
+    const manualId=db.prepare("INSERT INTO registrations(contest_id,name,cpf,phone,source) VALUES(?,?,?,?, 'administrador') RETURNING id").get(contestId,'Pessoa Extra','extra','').id;
+    s.assign(manualId,[extra.id]);
+    const print=await request(`/admin/contests/${contestId}/registrations/print`);
+    assert.equal(print.res.status,200);
+    assert.match(print.text,/Pessoa Importada/);
+    assert.match(print.text,/Pessoa Apoio/);
+    assert.match(print.text,/529\.982\.247-25/);
+    assert.match(print.text,/111\.444\.777-35/);
+    assert.match(print.text,/Manhã - R\$\s*180,75 - 2\/5/);
+    assert.ok(print.text.indexOf('Fiscal de sala') < print.text.indexOf('Apoio extra'));
+    assert.doesNotMatch(print.text,/Nenhum colaborador cadastrado/);
+    assert.doesNotMatch(print.text,/<th scope="col">WhatsApp<\/th>/);
+    assert.doesNotMatch(print.text,/<th scope="col">Grupo<\/th>/);
+    const receipts=await request(`/admin/contests/${contestId}/registrations/receipts`);
+    assert.equal(receipts.res.status,200);
+    assert.match(receipts.text,/COMANDA DE PAGAMENTO/);
+    assert.match(receipts.text,/Pessoa Importada/);
+    assert.match(receipts.text,/529\.982\.247-25/);
+    assert.match(receipts.text,/Equipe de trabalho/);
+    assert.match(receipts.text,/R\$\s*180,75/);
+    assert.match(receipts.text,/Fiscal de sala/);
+    assert.match(receipts.text,/pix-qr|receipt-qr/);
+    assert.match(receipts.text,/cortar aqui/);
   } finally {await new Promise(r=>server.close(r));db.close();}
 });
