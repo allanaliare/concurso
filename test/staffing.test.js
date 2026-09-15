@@ -111,6 +111,7 @@ test('painel cadastra cargos e atribui colaboradores; visitante não escolhe car
     const registrations=await request(`/admin/registrations?contest=${contestId}`);
     assert.match(registrations.text,/Fiscal · Manhã/);
     assert.match(registrations.text,/Imprimir lista/);
+    assert.match(registrations.text,/Comandas 80mm/);
     assert.match(registrations.text,/Cadastrar colaborador/);
     assert.match(registrations.text,/Importar colaboradores/);
     assert.match(registrations.text,/Sem cargo definido/);
@@ -140,6 +141,15 @@ test('painel cadastra cargos e atribui colaboradores; visitante não escolhe car
     assert.doesNotMatch(print.text,/<th scope="col">Pago<\/th>/);
     assert.doesNotMatch(print.text,/<th scope="col">WhatsApp<\/th>/);
     assert.doesNotMatch(print.text,/<th scope="col">Grupo<\/th>/);
+    const receipts=await request(`/admin/contests/${contestId}/registrations/receipts`);
+    assert.equal(receipts.res.status,200);
+    assert.match(receipts.text,/COMANDA DE PAGAMENTO/);
+    assert.match(receipts.text,/Pessoa A/);
+    assert.match(receipts.text,/Equipe de trabalho/);
+    assert.match(receipts.text,/R\$\s*300,00/);
+    assert.match(receipts.text,/@page\{size:80mm auto/);
+    assert.match(receipts.text,/Imprimir comandas 80mm/);
+    assert.match(receipts.text,/cortar aqui/);
     assert.equal((await request(`/admin/registrations/${a}/roles`,{})).res.status,302);
     assert.equal(s.assigned(a).length,0);
     assert.equal((await request(`/admin/registrations/${b}/roles`,{role_ids:morning.id,_csrf:'bad'})).res.status,403);
@@ -213,5 +223,15 @@ test('painel importa colaboradores com cargo e Pix CPF sem duplicar registros',a
     assert.doesNotMatch(print.text,/Nenhum colaborador cadastrado/);
     assert.doesNotMatch(print.text,/<th scope="col">WhatsApp<\/th>/);
     assert.doesNotMatch(print.text,/<th scope="col">Grupo<\/th>/);
+    const receipts=await request(`/admin/contests/${contestId}/registrations/receipts`);
+    assert.equal(receipts.res.status,200);
+    assert.match(receipts.text,/COMANDA DE PAGAMENTO/);
+    assert.match(receipts.text,/Pessoa Importada/);
+    assert.match(receipts.text,/529\.982\.247-25/);
+    assert.match(receipts.text,/Equipe de trabalho/);
+    assert.match(receipts.text,/R\$\s*180,75/);
+    assert.match(receipts.text,/Fiscal de sala/);
+    assert.match(receipts.text,/pix-qr|receipt-qr/);
+    assert.match(receipts.text,/cortar aqui/);
   } finally {await new Promise(r=>server.close(r));db.close();}
 });
