@@ -7,6 +7,16 @@ import { maskCpf } from './privacy.js';
 const fail = message => { throw new Error(message); };
 const formatCpf = value => String(value ?? '').replace(/^(\d{3})(\d{3})(\d{3})(\d{2})$/,'$1.$2.$3-$4');
 const toArray = value => value == null || value === '' ? [] : Array.isArray(value) ? value : [value];
+const percent = (value,total) => total ? Math.round((value / total) * 100) : 0;
+const brasiliaDate = value => {
+  if(!value) return null;
+  const text=String(value);
+  return new Date(`${text.length===16?`${text}:00`:text}-03:00`);
+};
+const afterContestStart = contest => {
+  const starts=brasiliaDate(contest.starts);
+  return starts && !Number.isNaN(starts.getTime()) && Date.now() >= starts.getTime();
+};
 const messageText = plans => plans.map(room=>{
   const lines=[room.name];
   for(const role of room.roles) {
@@ -35,16 +45,21 @@ export function migrateRooms(db) {
     );
     INSERT INTO schema_migrations(version) VALUES(8);
     COMMIT;`);
-  if(db.prepare('SELECT 1 FROM schema_migrations WHERE version=9').get()) return;
+  if(!db.prepare('SELECT 1 FROM schema_migrations WHERE version=9').get()) db.exec(`BEGIN IMMEDIATE;
+      CREATE TABLE room_assignments (
+        room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+        registration_id TEXT NOT NULL REFERENCES registrations(id) ON DELETE CASCADE,
+        role_id TEXT NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+        PRIMARY KEY(registration_id,role_id)
+      );
+      CREATE INDEX idx_room_assignments_room ON room_assignments(room_id);
+      INSERT INTO schema_migrations(version) VALUES(9);
+      COMMIT;`);
+  if(db.prepare('SELECT 1 FROM schema_migrations WHERE version=10').get()) return;
   db.exec(`BEGIN IMMEDIATE;
-    CREATE TABLE room_assignments (
-      room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
-      registration_id TEXT NOT NULL REFERENCES registrations(id) ON DELETE CASCADE,
-      role_id TEXT NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
-      PRIMARY KEY(registration_id,role_id)
-    );
-    CREATE INDEX idx_room_assignments_room ON room_assignments(room_id);
-    INSERT INTO schema_migrations(version) VALUES(9);
+    ALTER TABLE rooms ADD COLUMN present_count INTEGER NOT NULL DEFAULT 0 CHECK(present_count>=0);
+    ALTER TABLE rooms ADD COLUMN absent_count INTEGER NOT NULL DEFAULT 0 CHECK(absent_count>=0);
+    INSERT INTO schema_migrations(version) VALUES(10);
     COMMIT;`);
 }
 
@@ -137,6 +152,15 @@ export function rooms(db) {
     if(room.contest_id!==c.id) fail('Sala não pertence ao concurso.');
     db.prepare('DELETE FROM rooms WHERE id=?').run(roomId);
   }
+  function saveAttendance(contestId,roomId,body) {
+    const c=contest(contestId),room=get(roomId);
+    if(room.contest_id!==c.id) fail('Sala não pertence ao concurso.');
+    if(!afterContestStart(c)) fail('A presença só pode ser informada após o início da prova.');
+    const present=Number(body.present_count),absent=Number(body.absent_count);
+    if(!Number.isSafeInteger(present) || present<0 || !Number.isSafeInteger(absent) || absent<0) fail('Informe quantidades válidas de presentes e ausentes.');
+    db.prepare('UPDATE rooms SET present_count=?, absent_count=? WHERE id=?').run(present,absent,room.id);
+    return get(room.id);
+  }
   function plan(contestId) {
     const c=contest(contestId),roomList=list(c.id);
     return roomList.map(room=>{
@@ -157,7 +181,7 @@ export function rooms(db) {
         AND (ra.room_id IS NULL OR ra.room_id=?)
       ORDER BY ro.name COLLATE NOCASE,r.name COLLATE NOCASE,r.created_at`).all(contestId,roomId,roomId);
   }
-  return {list,rolesFor,get,save,createBatch,remove,plan,assignmentOptions};
+  return {list,rolesFor,get,save,createBatch,remove,saveAttendance,plan,assignmentOptions};
 }
 
 export function mountRooms(app,db,service,page,audit) {
@@ -179,10 +203,15 @@ export function mountRooms(app,db,service,page,audit) {
   }
   function roomsPage(req,res,contest,draft=null,error='') {
     const roles=roleOptions(contest.id),roomList=service.list(contest.id);
+    const canTrackAttendance=afterContestStart(contest);
+    const attendanceTotals=roomList.reduce((totals,room)=>({present:totals.present+room.present_count,absent:totals.absent+room.absent_count}),{present:0,absent:0});
+    const attendanceTotal=attendanceTotals.present+attendanceTotals.absent;
     contest={...contest,csrf:req.session.csrf};
     const composition=room=>service.rolesFor(room.id).map(r=>`<span>${esc(r.name)} <strong>${r.room_quantity}</strong></span>`).join('') || '<span>Sem cargos definidos</span>';
-    const cards=roomList.length?`<div class="room-grid">${roomList.map(room=>`<article class="room-card"><div><h2>${esc(room.name)}</h2><p>${room.assigned}/${room.planned} colaborador${room.planned===1?'':'es'}</p></div><div class="room-composition">${composition(room)}</div><div class="room-card-actions"><button class="secondary" type="button" data-open-dialog="room-${room.id}">Editar</button><form method="post" action="/admin/contests/${contest.id}/rooms/${room.id}/delete">${csrf(req.session.csrf)}<button class="text">Excluir</button></form></div></article><dialog class="room-dialog" id="room-${room.id}"><h2>Editar sala</h2>${roomForm(contest,roles,draft?.id===room.id?{...room,...draft}:room,draft?.id===room.id?[]:service.rolesFor(room.id))}</dialog>`).join('')}</div>`:'<div class="empty muted">Nenhuma sala cadastrada.</div>';
-    return page(req,res,'Salas',`<a class="back" href="/admin/contests/${contest.id}">← Gerenciar concurso</a><div class="contest-tabs"><a href="/admin/registrations?contest=${contest.id}">☰ Colaboradores</a><a href="/admin/contests/${contest.id}/roles">◎ Cargos</a><a class="active" href="/admin/contests/${contest.id}/rooms">▦ Salas</a></div><section class="panel rooms-panel"><div class="room-header"><div><p class="eyebrow">DISTRIBUIÇÃO</p><h1>Salas</h1><p>${roomList.length} sala${roomList.length===1?'':'s'}</p></div><div class="room-actions"><button type="button" data-open-dialog="new-room">Adicionar sala</button><a class="icon-action" href="/admin/contests/${contest.id}/rooms/message" title="Mensagem para WhatsApp" aria-label="Mensagem para WhatsApp">☰</a><a class="icon-action" href="/admin/contests/${contest.id}/rooms/print" title="Imprimir salas" aria-label="Imprimir salas">⎙</a></div></div>${cards}</section><dialog class="room-dialog" id="new-room"><h2>Adicionar sala</h2>${roomForm(contest,roles,draft&&!draft.id?draft:{})}</dialog><script src="/rooms.js" defer></script>`,error?400:200,error);
+    const attendanceForm=room=>canTrackAttendance?`<form class="room-attendance" method="post" action="/admin/contests/${contest.id}/rooms/${room.id}/attendance">${csrf(req.session.csrf)}<label>Presentes<input name="present_count" type="number" min="0" step="1" value="${room.present_count}"></label><label>Ausentes<input name="absent_count" type="number" min="0" step="1" value="${room.absent_count}"></label><button class="secondary">Salvar</button></form>`:'';
+    const attendanceSummary=canTrackAttendance?`<div class="room-attendance-total"><div><span>Presentes</span><strong>${attendanceTotals.present}</strong><small>${percent(attendanceTotals.present,attendanceTotal)}%</small></div><div><span>Ausentes</span><strong>${attendanceTotals.absent}</strong><small>${percent(attendanceTotals.absent,attendanceTotal)}%</small></div></div>`:'';
+    const cards=roomList.length?`<div class="room-grid">${roomList.map(room=>`<article class="room-card"><div><h2>${esc(room.name)}</h2><p>${room.assigned}/${room.planned} colaborador${room.planned===1?'':'es'}</p></div><div class="room-composition">${composition(room)}</div>${attendanceForm(room)}<div class="room-card-actions"><button class="secondary" type="button" data-open-dialog="room-${room.id}">Editar</button><form method="post" action="/admin/contests/${contest.id}/rooms/${room.id}/delete">${csrf(req.session.csrf)}<button class="text">Excluir</button></form></div></article><dialog class="room-dialog" id="room-${room.id}"><h2>Editar sala</h2>${roomForm(contest,roles,draft?.id===room.id?{...room,...draft}:room,draft?.id===room.id?[]:service.rolesFor(room.id))}</dialog>`).join('')}</div>${attendanceSummary}`:'<div class="empty muted">Nenhuma sala cadastrada.</div>';
+    return page(req,res,'Salas',`<a class="back" href="/admin/contests/${contest.id}">← Gerenciar concurso</a><div class="contest-tabs"><a href="/admin/registrations?contest=${contest.id}">☰ Colaboradores</a><a href="/admin/contests/${contest.id}/roles">◎ Cargos</a><a class="active" href="/admin/contests/${contest.id}/rooms">▦ Salas</a></div><section class="panel rooms-panel"><div class="room-header"><div><p class="eyebrow">DISTRIBUIÇÃO</p><h1>Salas</h1><p>${roomList.length} sala${roomList.length===1?'':'s'}</p></div><div class="room-actions"><button type="button" data-open-dialog="new-room">Adicionar sala</button><a class="icon-action" href="/admin/contests/${contest.id}/rooms/message" title="Mensagem para WhatsApp" aria-label="Mensagem para WhatsApp">☰</a><a class="icon-action" href="/admin/contests/${contest.id}/rooms/slides" target="_blank" rel="noopener" title="Abrir slide das salas" aria-label="Abrir slide das salas">▶</a><a class="icon-action" href="/admin/contests/${contest.id}/rooms/print" title="Imprimir salas" aria-label="Imprimir salas">⎙</a></div></div>${cards}</section><dialog class="room-dialog" id="new-room"><h2>Adicionar sala</h2>${roomForm(contest,roles,draft&&!draft.id?draft:{})}</dialog><script src="/rooms.js" defer></script>`,error?400:200,error);
   }
   const contest=value=>db.prepare(`SELECT * FROM contests WHERE id=? AND id IN (${accessibleContests()})`).get(id(value)) || fail('Concurso não encontrado.');
   app.get('/admin/contests/:id/rooms',(req,res)=>roomsPage(req,res,{...contest(req.params.id)},null,''));
@@ -207,6 +236,9 @@ export function mountRooms(app,db,service,page,audit) {
   app.post('/admin/contests/:id/rooms/:room/delete',(req,res)=>{
     const c=contest(req.params.id); service.remove(c.id,req.params.room); audit('sala.excluida',req.params.room); res.redirect(`/admin/contests/${c.id}/rooms`);
   });
+  app.post('/admin/contests/:id/rooms/:room/attendance',(req,res)=>{
+    const c=contest(req.params.id); service.saveAttendance(c.id,req.params.room,req.body); audit('sala.presenca',req.params.room); res.redirect(`/admin/contests/${c.id}/rooms`);
+  });
   app.get('/admin/contests/:id/rooms/message',(req,res)=>{
     const c=contest(req.params.id),plans=service.plan(c.id),text=messageText(plans);
     page(req,res,'Mensagem de ensalamento',`<a class="back" href="/admin/contests/${c.id}/rooms">← Voltar às salas</a><section class="panel room-message-panel"><div class="section-heading"><div><p class="eyebrow">WHATSAPP</p><h1>Mensagem de ensalamento</h1><p class="muted">Texto pronto para copiar e colar no WhatsApp.</p></div><button class="secondary" type="button" data-copy-room-message>Copiar mensagem</button></div><textarea class="room-message-box" id="room-message" readonly rows="18">${esc(text||'Nenhuma sala cadastrada.')}</textarea></section><script src="/rooms.js" defer></script>`);
@@ -218,5 +250,32 @@ export function mountRooms(app,db,service,page,audit) {
     const sheet=room=>{const total=room.roles.reduce((sum,role)=>sum+role.room_quantity,0),assigned=room.roles.reduce((sum,role)=>sum+role.assigned.length,0);return `<section class="print-sheet"><header class="print-head"><div><p class="eyebrow">ENSALAMENTO</p><h1>${esc(room.name)}</h1><p class="contest">${esc(c.title)} · ${esc(c.organizer)}</p></div><div class="summary"><div><span>Cargos</span><strong>${room.roles.length}</strong></div><div><span>Equipe</span><strong>${assigned}/${total}</strong></div></div></header><div class="room-body">${room.roles.length?room.roles.map(roleHtml).join(''):'<div class="empty-room">Nenhum cargo configurado para esta sala.</div>'}</div><footer class="print-foot"><span>${esc(c.location)}</span><span>Impresso pelo Ponto de Prova</span></footer></section>`};
     const body=`<div class="actions"><a href="/admin/contests/${c.id}/rooms">Voltar</a><button onclick="window.print()">Imprimir salas</button></div>${plans.length?plans.map(sheet).join(''):'<section class="print-sheet"><div class="empty-room"><h1>Nenhuma sala cadastrada.</h1></div></section>'}`;
     res.send(`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Impressão de salas · Ponto de Prova</title><style>${css}</style></head><body>${body}</body></html>`);
+  });
+  app.get('/admin/contests/:id/rooms/slides',(req,res)=>{
+    const c=contest(req.params.id),plans=service.plan(c.id);
+    const people=plans.flatMap(room=>room.roles.flatMap(role=>role.assigned));
+    const compound=new Set(['ana','maria','joao','jose','luiz','luis','paulo','pedro','carlos','antonio']);
+    const pieces=name=>String(name||'').trim().split(/\s+/).filter(Boolean);
+    const labelFor=(person,all)=>{
+      const tokens=pieces(person.name);
+      if(!tokens.length) return 'Sem nome';
+      let size=compound.has(tokens[0].normalize('NFD').replace(/\p{Diacritic}/gu,'').toLowerCase()) && tokens.length>1 ? 2 : 1;
+      const same=(candidate,other)=>candidate.toLocaleLowerCase('pt-BR')===pieces(other.name).slice(0,size).join(' ').toLocaleLowerCase('pt-BR');
+      while(size<tokens.length && all.some(other=>other!==person && same(tokens.slice(0,size).join(' '),other))) size++;
+      return tokens.slice(0,size).join(' ');
+    };
+    const data=plans.map(room=>({
+      name:room.name,
+      filled:room.roles.reduce((sum,role)=>sum+role.assigned.length,0),
+      planned:room.roles.reduce((sum,role)=>sum+role.room_quantity,0),
+      roles:room.roles.map(role=>({
+        name:role.name,
+        filled:role.assigned.length,
+        planned:role.room_quantity,
+        people:role.assigned.map(person=>({name:labelFor(person,people),fullName:person.name}))
+      }))
+    }));
+    const css=`*{box-sizing:border-box}html,body{height:100%}body{margin:0;background:#071411;color:#f6fff9;font-family:Inter,Segoe UI,Arial,sans-serif;overflow:hidden}.slide{min-height:100vh;display:grid;grid-template-rows:auto 1fr auto;gap:3.2vh;padding:4vh 5vw;background:radial-gradient(circle at 86% 8%,#39806f4d,transparent 32%),radial-gradient(circle at 8% 82%,#5c6f2a33,transparent 28%),#071411}.topbar{display:grid;grid-template-columns:1fr auto 1fr;align-items:end;gap:24px}.brand,.counter{color:#b8d7cb;font-size:clamp(14px,1.45vw,24px);font-weight:750}.brand strong{display:block;color:#f6fff9;font-size:clamp(18px,2.15vw,34px);line-height:1.12;margin-top:5px}.clock{text-align:center;font-size:clamp(62px,11vw,178px);font-weight:850;line-height:.86;letter-spacing:0}.clock-label{text-align:center;color:#b8d7cb;font-size:clamp(14px,1.45vw,24px);font-weight:750;margin-top:12px}.counter{text-align:right}.counter strong{display:block;color:#e1f6a6;font-size:clamp(28px,4.2vw,72px);line-height:1;margin-top:5px}.stage{min-height:0;border:1px solid #ffffff2b;border-radius:22px;background:#ffffff12;box-shadow:0 24px 80px #00000038;display:grid;grid-template-rows:auto 1fr;overflow:hidden}.room-head{display:flex;align-items:end;justify-content:space-between;gap:24px;padding:3.2vh 3.6vw;border-bottom:1px solid #ffffff1f}.room-title{font-size:clamp(48px,8vw,128px);line-height:.95;margin:0;color:#e1f6a6;font-weight:850}.room-meta{font-size:clamp(20px,2.4vw,42px);font-weight:800;color:#d8eee6;text-align:right;white-space:nowrap}.roles{min-height:0;display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:2.3vh 2.2vw;padding:3vh 3.6vw;align-content:start;overflow:hidden}.role{min-width:0}.role h2{display:flex;align-items:center;justify-content:space-between;gap:14px;margin:0 0 1.45vh;color:#b8d7cb;font-size:clamp(18px,2vw,34px);font-weight:800}.role h2 span{color:#f6fff9;background:#ffffff14;border:1px solid #ffffff24;border-radius:999px;padding:7px 13px;font-size:.72em;white-space:nowrap}.names{display:grid;gap:1.1vh}.person{font-size:clamp(32px,4.4vw,76px);font-weight:830;line-height:1.02;min-width:0;overflow-wrap:anywhere}.empty{height:100%;display:grid;place-items:center;text-align:center;color:#b8d7cb;font-size:clamp(30px,4.6vw,72px);font-weight:780}.footer{display:grid;grid-template-columns:1fr auto;gap:24px;align-items:center;color:#b8d7cb;font-size:clamp(14px,1.35vw,22px);font-weight:700}.progress{height:10px;border-radius:999px;background:#ffffff1c;overflow:hidden}.progress span{display:block;height:100%;width:0;background:#e1f6a6;border-radius:999px}.hint{text-align:right}@media(max-width:780px){body{overflow:auto}.slide{min-height:100dvh;padding:22px 16px}.topbar{grid-template-columns:1fr;align-items:center;text-align:center}.counter,.hint{text-align:center}.stage{border-radius:16px}.room-head{display:grid;text-align:center}.room-meta{text-align:center}.roles{grid-template-columns:1fr}.footer{grid-template-columns:1fr}.room-title{font-size:clamp(42px,13vw,84px)}}`;
+    res.send(`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Painel de salas · ${esc(c.title)}</title><style>${css}</style></head><body><main class="slide" data-rooms="${esc(JSON.stringify(data))}" data-server-now="${Date.now()}"><header class="topbar"><div class="brand">Painel de salas<strong>${esc(c.title)}</strong></div><div><div class="clock"></div><div class="clock-label">Horário de Brasília</div></div><div class="counter">Sala<strong>0/0</strong></div></header><section class="stage"></section><footer class="footer"><div class="progress"><span></span></div><div class="hint">${esc(c.organizer)} · ${esc(c.location)}</div></footer></main><script src="/room-slides.js" defer></script></body></html>`);
   });
 }
